@@ -26,6 +26,8 @@ async function main() {
   let accumulated = 0;
   let previousTime = performance.now();
   let fps = 60;
+  let fpsElapsed = 0;
+  let fpsFrames = 0;
   let frameId = 0;
   let disposed = false;
   let ui: GameUI;
@@ -81,6 +83,8 @@ async function main() {
     pending = { ...EMPTY_INPUT };
     accumulated = 0;
     previousTime = performance.now();
+    fpsElapsed = 0;
+    fpsFrames = 0;
     if (document.hidden) engine.pause();
   };
   document.addEventListener('visibilitychange', onVisibility);
@@ -91,9 +95,17 @@ async function main() {
   // Edge inputs are consumed exactly once, including on 120/144 Hz displays.
   function frame(now: number) {
     if (disposed) return;
-    const dt = Math.min(Math.max((now - previousTime) / 1000, 0), 0.1);
+    const frameSeconds = Math.max((now - previousTime) / 1000, 0);
+    const dt = Math.min(frameSeconds, 0.1);
     previousTime = now;
-    fps += ((dt > 0 ? 1 / dt : 60) - fps) * 0.04;
+    // Report observed rendering speed, independently of the physics catch-up cap.
+    fpsElapsed += frameSeconds;
+    fpsFrames++;
+    if (fpsElapsed >= 0.5) {
+      fps = fpsFrames / fpsElapsed;
+      fpsElapsed = 0;
+      fpsFrames = 0;
+    }
     const sampled = input.sample();
     pending = {
       ...sampled,

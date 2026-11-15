@@ -5,8 +5,9 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 1 : 0,
-  timeout: 45_000,
-  expect: { timeout: 10_000 },
+  // Software WebGL also compiles the PBR/shadow variants on first use.
+  timeout: process.env.CI ? 120_000 : 45_000,
+  expect: { timeout: process.env.CI ? 30_000 : 10_000 },
   reporter: [['list']],
   use: {
     baseURL: 'http://127.0.0.1:4173/pixijs-3d-poc/',

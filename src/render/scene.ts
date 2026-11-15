@@ -87,7 +87,9 @@ export class GameScene {
     this.app = app;
     this.host = host;
     this.backend = app.renderer.type === RendererType.WEBGPU ? 'WebGPU' : 'WebGL2';
-    const compatibilityMode = new URLSearchParams(location.search).get('quality') === 'compat';
+    const quality = new URLSearchParams(location.search).get('quality');
+    const compatibilityMode = quality === 'compat';
+    const highQuality = quality === 'high';
     // The beta generates a float BRDF target even for a hemisphere environment.
     const supportsFloatTargets = app.renderer.type !== RendererType.WEBGL
       || Boolean((app.renderer as WebGLRenderer).context.extensions.colorBufferFloat);
@@ -96,10 +98,14 @@ export class GameScene {
       height: host.clientHeight || 720,
       // Isolate scene depth from the Pixi 2D background and combat labels.
       composite: true,
+      // Bound PBR fragment work on software/mobile GPUs; Pixi 2D labels stay crisp.
+      // These are texels per CSS pixel. ?quality=high restores native scene detail
+      // for comparing @pixi/3d rendering, while compat reduces the budget further.
+      resolution: highQuality ? 'inherit' : compatibilityMode ? 0.6 : 0.8,
       toneMapping: 'aces',
       exposure: 1.1,
-      shadowQuality: 'medium',
-      shadowFilter: 'pcf',
+      shadowQuality: highQuality ? 'medium' : 'low',
+      shadowFilter: compatibilityMode ? 'hard' : 'pcf',
       environment: supportsFloatTargets && !compatibilityMode
         ? { skyColor: 0x718aa1, groundColor: 0x161f33, intensity: 0.7 }
         : null,
@@ -156,7 +162,6 @@ export class GameScene {
   static async create(host: HTMLElement): Promise<GameScene> {
     const app = new Application();
     const params = new URLSearchParams(location.search);
-    const compatibilityMode = params.get('quality') === 'compat';
     let preference: 'webgpu' | 'webgl' = 'webgl';
     if (params.get('renderer') === 'webgpu') {
       try {
@@ -168,7 +173,8 @@ export class GameScene {
       preference,
       width: host.clientWidth || 1280,
       height: host.clientHeight || 720,
-      antialias: !compatibilityMode,
+      // Composite AA adds 4x color/depth samples plus a resolve on every frame.
+      antialias: params.get('quality') === 'high',
       background: 0x080f19,
       autoDensity: true,
       resolution: Math.min(window.devicePixelRatio || 1, 1.5),

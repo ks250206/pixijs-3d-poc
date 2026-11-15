@@ -4,22 +4,24 @@ import type { WorldState } from '../../src/game/types';
 // A visible canvas can still contain only the 2D labels if the 3D render pass fails.
 // Sample the actual drawing buffer so that this cannot silently pass the smoke test.
 async function expectRenderedArena(page: Page) {
-  const litFraction = await page.evaluate(async () => new Promise<number>((resolve) => {
+  const litFraction = await page.evaluate(async () => new Promise<number>((resolve, reject) => {
     requestAnimationFrame(() => {
-      const app = (window as unknown as { __UPRISING__: { scene: { app: { render: () => void } } } }).__UPRISING__.scene.app;
-      app.render();
-      const source = document.querySelector<HTMLCanvasElement>('#scene canvas')!;
-      const sample = document.createElement('canvas');
-      sample.width = 160;
-      sample.height = 100;
-      const context = sample.getContext('2d')!;
-      context.drawImage(source, 0, 0, 160, 100);
-      const pixels = context.getImageData(0, 0, 160, 100).data;
-      let lit = 0;
-      for (let i = 0; i < pixels.length; i += 4) {
-        if (pixels[i] + pixels[i + 1] + pixels[i + 2] > 90) lit++;
-      }
-      resolve(lit / (160 * 100));
+      try {
+        const app = (window as unknown as { __UPRISING__: { scene: { app: { render: () => void } } } }).__UPRISING__.scene.app;
+        app.render();
+        const source = document.querySelector<HTMLCanvasElement>('#scene canvas')!;
+        const sample = document.createElement('canvas');
+        sample.width = 160;
+        sample.height = 100;
+        const context = sample.getContext('2d')!;
+        context.drawImage(source, 0, 0, 160, 100);
+        const pixels = context.getImageData(0, 0, 160, 100).data;
+        let lit = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+          if (pixels[i] + pixels[i + 1] + pixels[i + 2] > 90) lit++;
+        }
+        resolve(lit / (160 * 100));
+      } catch (error) { reject(error); }
     });
   }));
   expect(litFraction, 'The 3D arena must occupy a visible part of the canvas').toBeGreaterThan(0.08);
@@ -88,7 +90,8 @@ test('keyboard movement, jumping, charging, pausing and recovery work in the ren
   await expect.poll(async () => (await snapshot(page)).player.state).toBe('charge');
   await expect.poll(async () => (await snapshot(page)).player.attack?.charge ?? 0).toBeGreaterThan(0.3);
   await page.keyboard.up('k');
-  await expect.poll(async () => (await snapshot(page)).lastMove).toContain('SMASH');
+  await expect.poll(async () => (await snapshot(page)).lastMove).toBe('FORWARD SMASH');
+  await expect.poll(async () => (await snapshot(page)).player.state).toBe('attack');
   await expect.poll(async () => (await snapshot(page)).player.state).toBe('idle');
   await page.keyboard.press('l');
   await expect.poll(async () => (await snapshot(page)).specialCooldown).toBeGreaterThan(0);
