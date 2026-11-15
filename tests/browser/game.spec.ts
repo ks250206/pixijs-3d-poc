@@ -182,11 +182,8 @@ test('cleared-stage supplies apply once and route departure enters the next stag
 });
 
 test('renders the expanded roster and distinct stage scenery', async ({ page }) => {
-  // Bound software rasterization work across the extended route and roster.
-  if (process.env.CI) {
-    test.setTimeout(240_000);
-    await page.setViewportSize({ width: 1120, height: 700 });
-  }
+  // The extended route gets more time, using the shared CI desktop viewport.
+  if (process.env.CI) test.setTimeout(240_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await training(page);
@@ -217,11 +214,8 @@ test('renders the expanded roster and distinct stage scenery', async ({ page }) 
 });
 
 test('selects and plays each new fighting style with its own attack', async ({ page }) => {
-  // Three complete flows need a smaller desktop viewport on CI's software GPU.
-  if (process.env.CI) {
-    test.setTimeout(240_000);
-    await page.setViewportSize({ width: 1120, height: 700 });
-  }
+  // Three complete flows use the shared CI desktop viewport and a longer timeout.
+  if (process.env.CI) test.setTimeout(240_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await boot(page);
@@ -247,7 +241,7 @@ test('selects and plays each new fighting style with its own attack', async ({ p
 });
 
 test('renders boss floor warnings even with reduced graphics', async ({ page }) => {
-  await page.setViewportSize({ width: 1120, height: 700 });
+  if (!process.env.CI) await page.setViewportSize({ width: 1120, height: 700 });
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await training(page);

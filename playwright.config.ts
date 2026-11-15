@@ -21,7 +21,12 @@ export default defineConfig({
       args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-dev-shm-usage'],
     },
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } }],
+  projects: [{ name: 'chromium', use: {
+    ...devices['Desktop Chrome'],
+    // Keep the desktop layout while bounding SwiftShader's pixel workload for
+    // every test, so the complete suite fits the CI job's 12-minute budget.
+    viewport: process.env.CI ? { width: 960, height: 600 } : { width: 1440, height: 900 },
+  } }],
   webServer: {
     command: `pnpm preview --host 127.0.0.1 --port ${port} --strictPort`,
     url: baseURL,
