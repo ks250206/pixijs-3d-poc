@@ -849,6 +849,10 @@ export class GameEngine {
       this.effect('text', target.x, target.y + 2, target.z, 1.1, 1, 0x6bbfff, 'GUARD BREAK');
       this.effect('shockwave', target.x, target.y + 1, target.z, 0.5, 2.5, 0x6bbfff);
     }
+    // Fresh enemies must be softened up before launchers become finishers.
+    // Use damage BEFORE this hit so a powerful first strike cannot immediately
+    // bypass the resistance. Player knockback and 100%+ enemy launches stay intact.
+    const launchScale = target.kind === 'player' ? 1 : 0.3 + 0.7 * clamp(target.damage / 100, 0, 1);
     target.damage = Math.min(999, target.damage + damage);
     let armored = target.armor > 0;
     if (armored) {
@@ -862,7 +866,7 @@ export class GameEngine {
       }
     }
     const weight = target.kind === 'player' ? w.loadout.weight : target.kind === 'boss' ? 1.85 : target.kind === 'warden' ? 1.5 : target.mount > 0 ? 1.4 : target.kind === 'minion' ? 0.6 : target.kind === 'bruiser' ? 1.45 : target.kind === 'drone' ? 0.78 : 1;
-    const impulse = (force + target.damage * growth) / weight * (armored ? 0.16 : 1);
+    const impulse = (force + target.damage * growth) / weight * (armored ? 0.16 : 1) * launchScale;
     target.vx = facing * Math.cos(angle) * impulse;
     target.vy = Math.sin(angle) * impulse;
     if (target.y <= 0.05 && target.vy < 0) target.vy = Math.abs(target.vy) * 0.6 + 4;
