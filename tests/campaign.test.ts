@@ -23,9 +23,9 @@ const isolated = (kind: ActorKind) => {
 };
 
 describe('campaign structure and supplies', () => {
-  it('offers five distinct stages with introductions, combined encounters and two midbosses', () => {
-    expect(STAGES).toHaveLength(5);
-    expect(new Set(STAGES.map((stage) => stage.theme)).size).toBe(5);
+  it('offers seven distinct stages with introductions, combined encounters and two midbosses', () => {
+    expect(STAGES).toHaveLength(7);
+    expect(new Set(STAGES.map((stage) => stage.theme)).size).toBe(7);
     expect(STAGES.filter((stage) => stage.waves.some((wave) => wave.enemies.includes('warden')))).toHaveLength(2);
     const kinds = new Set(STAGES.flatMap((s) => s.waves.flatMap((w) => w.enemies)));
     for (const kind of ['leaper', 'artillery', 'rider', 'captain', 'drone', 'boss']) expect(kinds.has(kind as ActorKind)).toBe(true);
@@ -50,7 +50,7 @@ describe('campaign structure and supplies', () => {
       }
     }
     expect(game.world.phase).toBe('won');
-    expect(game.world.completedSectors).toBe(5);
+    expect(game.world.completedSectors).toBe(STAGES.length);
   });
 
   it('grants a supply once at a cleared stage and preserves upgrades into the next', () => {

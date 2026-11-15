@@ -1,6 +1,6 @@
-export type ActorKind = 'player' | 'scout' | 'bruiser' | 'gunner' | 'drone' | 'sentinel' | 'charger' | 'leaper' | 'artillery' | 'rider' | 'captain' | 'minion' | 'warden' | 'boss';
+export type ActorKind = 'player' | 'scout' | 'bruiser' | 'gunner' | 'drone' | 'sentinel' | 'charger' | 'leaper' | 'artillery' | 'rider' | 'captain' | 'minion' | 'sniper' | 'sapper' | 'warden' | 'boss';
 export type SupplyChoice = 'repair' | 'power' | 'stock';
-export type ActionState = 'idle' | 'run' | 'jump' | 'fall' | 'attack' | 'charge' | 'dodge' | 'airdodge' | 'wavedash' | 'hurt' | 'grab' | 'grabbed' | 'dead' | 'shield';
+export type ActionState = 'idle' | 'run' | 'jump' | 'fall' | 'recover' | 'attack' | 'charge' | 'dodge' | 'airdodge' | 'wavedash' | 'hurt' | 'grab' | 'grabbed' | 'dead' | 'shield';
 export type AttackDirection = 'neutral' | 'forward' | 'back' | 'up' | 'down';
 export type AttackKind = 'jab' | 'tilt' | 'smash' | 'dash' | 'aerial' | 'throw' | 'special' | 'enemy';
 export type GamePhase = 'ready' | 'playing' | 'paused' | 'sector-clear' | 'won' | 'lost';
@@ -38,7 +38,7 @@ export interface InputFrame {
   grab: boolean;
   dash: boolean;
   pause: boolean;
-  // A short direction flick also turns a simultaneous basic attack into a smash.
+  // Direction pulses are independent of the dedicated smash action.
   flickX: number;
   flickZ: number;
 }
@@ -105,6 +105,25 @@ export interface Projectile {
   color: number;
 }
 
+/** Authoritative floor footprint: the renderer uses these exact collision bounds. */
+export interface AreaHazard {
+  id: string;
+  group: string;
+  ownerId: string;
+  pattern: 'lanes' | 'cross' | 'sweep' | 'snipe' | 'mine';
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+  elapsed: number;
+  delay: number;
+  duration: number;
+  height: number;
+  damage: number;
+  force: number;
+  hit: boolean;
+}
+
 export interface Effect {
   id: string;
   type: 'hit' | 'ringout' | 'trail' | 'shockwave' | 'spawn' | 'text' | 'telegraph' | 'heal';
@@ -151,6 +170,7 @@ export interface WorldState {
   player: Actor;
   enemies: Actor[];
   projectiles: Projectile[];
+  hazards: AreaHazard[];
   effects: Effect[];
   props: ArenaProp[];
   loadout: Loadout;
@@ -172,7 +192,7 @@ export interface WorldState {
   events: GameEvent[];
 }
 
-export const ENEMY_NAMES: Record<ActorKind, string> = { player: 'YOU', scout: 'SCOUT', bruiser: 'BRUISER', gunner: 'GUNNER', drone: 'DRONE', sentinel: 'SENTINEL', charger: 'CHARGER', leaper: 'LEAPER', artillery: 'ARTILLERY', rider: 'STRIDER', captain: 'COMMANDER', minion: 'MINION', warden: 'THE WARDEN', boss: 'THE ARCHITECT' };
+export const ENEMY_NAMES: Record<ActorKind, string> = { player: 'YOU', scout: 'SCOUT', bruiser: 'BRUISER', gunner: 'GUNNER', drone: 'DRONE', sentinel: 'SENTINEL', charger: 'CHARGER', leaper: 'LEAPER', artillery: 'ARTILLERY', rider: 'STRIDER', captain: 'COMMANDER', minion: 'MINION', sniper: 'DEADEYE', sapper: 'SAPPER', warden: 'THE WARDEN', boss: 'THE ARCHITECT' };
 export const WEAPON_NAMES: Record<WeaponId, string> = { arc: 'ARC BLADE', pile: 'PILE DRIVER', razor: 'RAZOR FISTS', lance: 'VOLT LANCE', cannon: 'SIEGE CANNON', scythe: 'ORBIT SCYTHE' };
 export const SPECIAL_NAMES: Record<SpecialId, string> = { pulse: 'ION PULSE', blink: 'PHASE SHIFT', vortex: 'GRAVITY WELL' };
 export const TRAIT_NAMES: Record<TraitId, string> = { lightweight: 'LIGHTWEIGHT', 'heavy-duty': 'HEAVY DUTY', overclocked: 'OVERCLOCKED', vampiric: 'SELF REPAIR', volatile: 'VOLATILE', stable: 'STABILIZED' };

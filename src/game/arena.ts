@@ -1,3 +1,4 @@
+import { ARENA_HALF_WIDTH, SECTOR_SPAN, STAGES } from './campaign';
 import type { ArenaProp } from './types';
 
 /** Walkable lanes remain between machinery; every sector has its own layout. */
@@ -5,7 +6,7 @@ export function createArena(sector: number): ArenaProp[] {
   const props: ArenaProp[] = [];
   const add = (kind: ArenaProp['kind'], x: number, z: number, width = 1.1, depth = 1.1, direction: 1 | -1 = 1) => {
     props.push({
-      id: `arena-${sector}-${props.length}`, kind, x: sector * 28 + x, z, width, depth,
+      id: `arena-${sector}-${props.length}`, kind, x: sector * SECTOR_SPAN + x * ARENA_HALF_WIDTH / 11, z, width, depth,
       height: kind === 'barrel' ? 1.35 : kind === 'crate' ? 1 : 0.08,
       hp: kind === 'crate' ? 12 : kind === 'barrel' ? 10 : 0,
       alive: true, phase: 'idle', timer: props.length * 0.65, direction,
@@ -33,6 +34,12 @@ export function createArena(sector: number): ArenaProp[] {
     add('barrel', 2, -2.5);
     add('barrel', 4, -2.5);
     add('vent', -1, 2.6, 3.4, 1.5);
+  } else if (STAGES[sector]?.theme === 'barracks') {
+    add('barrel', -6, -2.7); add('barrel', 6, 2.7);
+    add('barrel', 3, -2.7); add('crate', -7, 2.8); add('crate', 7, -3);
+  } else if (STAGES[sector]?.theme === 'gauntlet') {
+    add('conveyor', 0, -2.6, 19, 1.3); add('conveyor', 0, 2.6, 19, 1.3, -1);
+    add('crate', -7, 0); add('barrel', 7, -3); add('vent', 4, 0, 2.4, 1.6);
   } else {
     add('crate', 4, -3.1);
     add('barrel', -5, 2.8);

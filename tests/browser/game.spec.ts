@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { WorldState } from '../../src/game/types';
+import type { GameEngine } from '../../src/game/engine';
 
 // A visible canvas can still contain only the 2D labels if the 3D render pass fails.
 // Sample the actual drawing buffer so that this cannot silently pass the smoke test.
@@ -105,12 +106,12 @@ test('compatibility mode renders the arena without floating-point environment li
   await expectRenderedArena(page);
 });
 
-test('world map pauses combat, shows five stages, and resumes with Escape', async ({ page }) => {
+test('world map pauses combat, shows seven stages, and resumes with Escape', async ({ page }) => {
   await boot(page);
   await page.locator('[data-action=start]').click();
   await page.locator('.top-actions [data-action=map]').click();
   await expect(page.getByRole('dialog', { name: 'REBELLION ROUTE' })).toBeVisible();
-  await expect(page.locator('.route-node')).toHaveCount(5);
+  await expect(page.locator('.route-node')).toHaveCount(7);
   expect((await snapshot(page)).phase).toBe('paused');
   const time = (await snapshot(page)).time;
   await page.waitForTimeout(120);
@@ -163,7 +164,7 @@ test('cleared-stage supplies apply once and route departure enters the next stag
   await page.locator('[data-action=start]').click();
   await page.evaluate(() => {
     const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; update: (dt: number) => void } } }).__UPRISING__.engine;
-    for (let wave = 0; wave < 2; wave++) {
+    for (let wave = 0; wave < 3; wave++) {
       engine.world.enemies.forEach((enemy) => { enemy.x = engine.world.arenaMax + 6; });
       for (let i = 0; i < 100; i++) engine.update(1 / 60);
     }
@@ -181,7 +182,7 @@ test('cleared-stage supplies apply once and route departure enters the next stag
 });
 
 test('renders the expanded roster and distinct stage scenery', async ({ page }) => {
-  // Bound software rasterization work across seven scene/wave renders.
+  // Bound software rasterization work across the extended route and roster.
   if (process.env.CI) {
     test.setTimeout(240_000);
     await page.setViewportSize({ width: 1120, height: 700 });
@@ -189,7 +190,7 @@ test('renders the expanded roster and distinct stage scenery', async ({ page }) 
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await training(page);
-  for (const sector of [1, 2, 3, 4]) {
+  for (const sector of [1, 2, 3, 4, 5, 6]) {
     await page.evaluate(() => {
       const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; nextSector: () => void } } }).__UPRISING__.engine;
       engine.world.mode = 'campaign'; engine.world.phase = 'sector-clear'; engine.nextSector();
@@ -201,7 +202,7 @@ test('renders the expanded roster and distinct stage scenery', async ({ page }) 
     await expectRenderedArena(page);
     await page.screenshot({ path: `test-results/screenshots/stage-${sector + 1}.png` });
   }
-  for (let wave = 2; wave <= 4; wave++) {
+  for (let wave = 2; wave <= 5; wave++) {
     await page.evaluate(() => {
       const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; update: (dt: number) => void } } }).__UPRISING__.engine;
       engine.world.enemies.forEach((enemy) => { enemy.x = engine.world.arenaMax + 6; });
@@ -245,6 +246,41 @@ test('selects and plays each new fighting style with its own attack', async ({ p
   expect(errors).toEqual([]);
 });
 
+test('renders boss floor warnings even with reduced graphics', async ({ page }) => {
+  await page.setViewportSize({ width: 1120, height: 700 });
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await training(page);
+  // Rendering fixture: reach the real final boss and freeze its first warning.
+  await page.evaluate(() => {
+    const engine = (window as unknown as { __UPRISING__: { engine: GameEngine } }).__UPRISING__.engine;
+    engine.world.mode = 'campaign';
+    for (let sector = 0; sector < 6; sector++) { engine.world.phase = 'sector-clear'; engine.nextSector(); }
+    engine.world.player.invulnerable = 100;
+    for (let wave = 0; wave < 3; wave++) {
+      engine.world.enemies.forEach(e => { e.x = engine.world.arenaMax + 6; });
+      for (let i = 0; i < 100; i++) engine.update(1 / 60);
+    }
+    engine.world.player.x = (engine.world.arenaMin + engine.world.arenaMax) / 2 - 2;
+    for (let i = 0; i < 240 && !engine.world.hazards.length; i++) engine.update(1 / 60);
+    // Freeze combat without the pause dialog obscuring the floor markers.
+    engine.world.hitstop = 100;
+    engine.world.player.invulnerable = 0;
+    engine.world.messageTime = 0;
+  });
+  expect((await snapshot(page)).hazards.length).toBeGreaterThan(0);
+  await expect(page.locator('[data-hud=boss]')).toBeVisible();
+  await expectRenderedArena(page);
+  await page.screenshot({ path: 'test-results/screenshots/boss-warning.png' });
+  await page.locator('.top-actions [data-action=graphics]').click();
+  await page.locator('[data-preset=low]').click();
+  await page.getByRole('button', { name: '設定を閉じる →' }).click();
+  expect((await snapshot(page)).hazards.length).toBeGreaterThan(0);
+  await expectRenderedArena(page);
+  await page.screenshot({ path: 'test-results/screenshots/boss-warning-low.png' });
+  expect(errors).toEqual([]);
+});
+
 test('shows a clear requirement when the browser has no GPU rendering backend', async ({ page }) => {
   await page.addInitScript(() => {
     const original = HTMLCanvasElement.prototype.getContext;
@@ -273,6 +309,15 @@ test('keyboard movement, jumping, charging, pausing and recovery work in the ren
   await expect.poll(async () => (await snapshot(page)).player.y, { intervals: [30, 50, 80] }).toBeGreaterThan(0.15);
   await page.keyboard.up('Space');
   await expect.poll(async () => (await snapshot(page)).player.y).toBe(0);
+  // Same-frame direction + J used to accidentally enter a smash charge.
+  await page.evaluate(() => {
+    for (const code of ['KeyW', 'KeyJ']) window.dispatchEvent(new KeyboardEvent('keydown', { code, bubbles: true }));
+  });
+  await expect.poll(async () => (await snapshot(page)).lastMove).toBe('UP TILT');
+  await page.evaluate(() => {
+    for (const code of ['KeyW', 'KeyJ']) window.dispatchEvent(new KeyboardEvent('keyup', { code, bubbles: true }));
+  });
+  await expect.poll(async () => (await snapshot(page)).player.state).toBe('idle');
   await page.keyboard.down('k');
   await expect.poll(async () => (await snapshot(page)).player.state).toBe('charge');
   await expect.poll(async () => (await snapshot(page)).player.attack?.charge ?? 0).toBeGreaterThan(0.3);

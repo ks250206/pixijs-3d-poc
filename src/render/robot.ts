@@ -47,6 +47,7 @@ export class RobotView {
   private readonly chassisDetails = new Map<WeaponId, Container3D>();
   private readonly guardPlate = new Container3D();
   private readonly mount = new Container3D();
+  private readonly boosters = new Container3D();
   private readonly mountLegs: Container3D[] = [];
   private readonly parts: { mesh: Mesh3D; material: Material3D }[] = [];
   private readonly rotors: Container3D[] = [];
@@ -62,6 +63,9 @@ export class RobotView {
     const glow = assets.glow[kind];
     if (this.isDrone) this.buildDrone(armor, glow);
     else this.buildHumanoid(armor, glow);
+    this.root.addChild(this.boosters);
+    for (const x of [-0.26, 0.26]) this.box(this.boosters, assets.glow.sniper, x, 0.05, -0.28, 0.14, 0.8, 0.14, false);
+    this.boosters.visible = false;
 
     const disc = new Mesh3D({
       geometry: assets.sphere,
@@ -188,6 +192,19 @@ export class RobotView {
       this.box(this.rightArm, a.trim, 0, -0.6, 0.22, 0.5, 0.56, 0.65);
       this.box(this.rightArm, glow, 0, -0.6, 0.56, 0.28, 0.28, 0.04, false);
       this.box(this.leftArm, a.trim, 0, -0.6, 0.17, 0.45, 0.4, 0.55);
+    } else if (this.kind === 'sniper') {
+      this.box(this.rightArm, a.trim, 0, -0.6, 0.6, 0.22, 0.25, 1.7);
+      this.box(this.rightArm, glow, 0, -0.6, 1.48, 0.12, 0.12, 0.07, false);
+      this.box(this.rightArm, glow, 0, -0.35, 0.7, 0.12, 0.12, 0.35, false);
+      this.box(this.head, armor, -0.18, 0.05, 0.22, 0.3, 0.3, 0.2);
+      this.ball(this.head, glow, -0.18, 0.05, 0.35, 0.1);
+    } else if (this.kind === 'sapper') {
+      this.box(this.body, a.trim, 0, 0.28, -0.4, 0.8, 0.9, 0.4);
+      for (const x of [-0.28, 0, 0.28]) {
+        this.box(this.body, armor, x, -0.08, 0.3, 0.22, 0.22, 0.22);
+        this.box(this.body, glow, x, -0.08, 0.43, 0.11, 0.06, 0.03, false);
+      }
+      this.box(this.leftArm, glow, 0, -0.7, 0.17, 0.38, 0.1, 0.38, false);
     } else if (this.kind === 'gunner') {
       this.box(this.rightArm, a.trim, 0, -0.56, 0.35, 0.25, 0.25, 0.9);
       this.box(this.rightArm, glow, 0, -0.56, 0.82, 0.16, 0.16, 0.06, false);
@@ -339,12 +356,14 @@ export class RobotView {
     this.root.rotation.y = actor.facing * Math.PI / 2;
     this.root.rotation.z = 0;
     this.root.visible = actor.alive;
+    this.boosters.visible = actor.state === 'recover';
+    this.boosters.scale.y = 1 + Math.sin(time * 40) * 0.2;
     this.shadow.position.set(actor.x, 0.028, actor.z);
     this.shadow.scale.set(scale);
     this.shadow.visible = actor.alive && Math.abs(actor.z) < 4.5 && actor.y < 12;
     this.marker.rotation.y = time * 0.4;
-    this.warning.visible = actor.telegraph > 0;
-    if (actor.telegraph > 0) {
+    this.warning.visible = actor.telegraph > 0 && !actor.attack?.name.startsWith('GRID /');
+    if (this.warning.visible) {
       const radius = this.kind === 'boss' ? 1.6 : 1.1;
       const pulse = 1 + Math.sin(time * 28) * 0.06;
       this.warning.scale.set(radius * pulse, 1, radius * pulse);
