@@ -17,7 +17,7 @@ import {
 } from '@pixi/3d';
 import { ENEMY_NAMES, type Actor, type ActorKind, type ArenaProp, type Effect, type Projectile, type WorldState } from '../game/types';
 import { attackMotion } from './motion';
-import { STAGES } from '../game/campaign';
+import { ARENA_HALF_WIDTH, SECTOR_SPAN, STAGES } from '../game/campaign';
 import { RobotView } from './robot';
 import type { RobotAssets } from './robot';
 import { loadGraphics, normalizeGraphics, saveGraphics, sceneResolution, type GraphicsSettings, type GraphicsState } from './graphics';
@@ -35,6 +35,8 @@ const COLORS: Record<ActorKind, number> = {
   rider: 0xffa75e,
   captain: 0xc9ed6a,
   minion: 0x9bd668,
+  sniper: 0x7beaff,
+  sapper: 0xffdd75,
   warden: 0xff768f,
   boss: 0xff654d,
 };
@@ -80,6 +82,7 @@ export class GameScene {
   private readonly stageDecor = new Container3D();
   private readonly actors = new Map<string, ActorView>();
   private readonly effects = new Map<string, EffectView>();
+  private readonly hazards = new Map<string, { root: Container3D; fill: Mesh3D; progress: Mesh3D; label: Text }>();
   private readonly projectiles = new Map<string, ProjectileView>();
   private readonly props = new Map<string, PropView>();
   private readonly materials: Material3D[] = [];
@@ -168,6 +171,8 @@ export class GameScene {
       rider: this.material(0x98653e, 0.5, 0.5),
       captain: this.material(0x6f8150, 0.5, 0.4),
       minion: this.material(0x4f7550, 0.7, 0.2),
+      sniper: this.material(0x376d80, 0.5, 0.4),
+      sapper: this.material(0x9e8137, 0.6, 0.35),
       warden: this.material(0x735569, 0.45, 0.6),
       boss: this.material(0x424d60, 0.42, 0.65),
     };
@@ -350,24 +355,24 @@ export class GameScene {
     const windowBlue = this.material(0x29485a, 0.5, 0.1);
 
     // Deck: actual beveled-looking tiers, inset panels, lane seams, blast-zone edges.
-    this.box(g, frame, 0, -0.48, 0, 22.4, 0.8, 9.4);
-    this.box(g, steel, 0, -0.15, 0, 22.1, 0.3, 9.1);
-    this.box(g, frame, 0, -0.93, 0, 21.5, 0.28, 8.7);
-    for (let ix = 0; ix < 11; ix++) {
+    this.box(g, frame, 0, -0.48, 0, ARENA_HALF_WIDTH * 2 + 0.4, 0.8, 9.4);
+    this.box(g, steel, 0, -0.15, 0, ARENA_HALF_WIDTH * 2 + 0.1, 0.3, 9.1);
+    this.box(g, frame, 0, -0.93, 0, ARENA_HALF_WIDTH * 2 - 0.5, 0.28, 8.7);
+    for (let ix = 0; ix < ARENA_HALF_WIDTH; ix++) {
       for (let iz = 0; iz < 5; iz++) {
-        this.box(g, (ix + iz) % 2 ? deckA : deckB, -10 + ix * 2, -0.025, -3.6 + iz * 1.8, 1.97, 0.05, 1.77);
+        this.box(g, (ix + iz) % 2 ? deckA : deckB, -ARENA_HALF_WIDTH + 1 + ix * 2, -0.025, -3.6 + iz * 1.8, 1.97, 0.05, 1.77);
       }
     }
-    for (const z of [-2.7, -0.9, 0.9, 2.7]) this.box(g, pale, 0, 0.008, z, 21.8, 0.01, 0.022);
+    for (const z of [-2.7, -0.9, 0.9, 2.7]) this.box(g, pale, 0, 0.008, z, ARENA_HALF_WIDTH * 2 - 0.2, 0.01, 0.022);
     for (const z of [-4.38, 4.38]) {
-      this.box(g, rubber, 0, 0.01, z, 22, 0.03, 0.25);
-      for (let i = 0; i < 25; i++) {
-        const strip = this.box(g, yellow, -10.65 + i * 0.88, 0.035, z, 0.38, 0.02, 0.24);
+      this.box(g, rubber, 0, 0.01, z, ARENA_HALF_WIDTH * 2, 0.03, 0.25);
+      for (let i = 0; i < Math.floor(ARENA_HALF_WIDTH * 2 / 0.88); i++) {
+        const strip = this.box(g, yellow, -ARENA_HALF_WIDTH + 0.35 + i * 0.88, 0.035, z, 0.38, 0.02, 0.24);
         strip.rotation.y = -0.4;
       }
-      this.box(g, cyan, 0, -0.22, z + Math.sign(z) * 0.2, 21.8, 0.035, 0.035);
+      this.box(g, cyan, 0, -0.22, z + Math.sign(z) * 0.2, ARENA_HALF_WIDTH * 2 - 0.2, 0.035, 0.035);
     }
-    for (const x of [-10.95, 10.95]) {
+    for (const x of [-ARENA_HALF_WIDTH + 0.05, ARENA_HALF_WIDTH - 0.05]) {
       this.box(g, this.accent, x, 0.015, 0, 0.08, 0.025, 8.7);
       this.box(g, cyan, x, -0.43, 0, 0.04, 0.06, 9.1);
     }
@@ -560,6 +565,18 @@ export class GameScene {
         this.box(g, dark, x, 1.7, -4.5, 1.5, 2.6, 0.08);
         for (const y of [0.7, 1.7, 2.7]) this.box(g, glow, x, y, -4.4, 0.8, 0.15, 0.04);
       }
+    } else if (stage.theme === 'barracks') {
+      for (const x of [-11, -7, -3, 1, 5, 9]) {
+        this.box(g, steel, x, 1.8, -5.1, 2.9, 3.6, 0.8);
+        this.box(g, dark, x, 1.7, -4.65, 2.4, 3.1, 0.08);
+        for (const y of [0.6, 1.5, 2.4]) this.box(g, glow, x, y, -4.58, 2.1, 0.07, 0.04);
+      }
+    } else if (stage.theme === 'gauntlet') {
+      for (const x of [-11, -5.5, 0, 5.5, 11]) {
+        this.box(g, steel, x, 2.8, -5, 0.4, 5.6, 0.5);
+        this.box(g, glow, x, 2.8, -4.7, 0.12, 5, 0.04);
+        this.box(g, steel, x, 5.6, -1, 0.4, 0.3, 8);
+      }
     } else if (stage.theme === 'core') {
       for (const x of [-8, -5, 5, 8]) {
         this.box(g, dark, x, 2.8, -5.5, 1.5, 5.6, 1);
@@ -652,7 +669,7 @@ export class GameScene {
       text: '0%',
       style: {
         fontFamily: 'monospace',
-        fontSize: actor.kind === 'boss' ? 20 : 14,
+        fontSize: actor.kind === 'boss' ? 20 : actor.kind === 'minion' ? 12 : 14,
         fontWeight: '800',
         fill: COLORS[actor.kind],
         stroke: { color: 0x07111c, width: 4 },
@@ -681,7 +698,7 @@ export class GameScene {
     const point = this.view.worldToScreen({ x: actor.x, y: actor.y + actor.scale * (actor.kind === 'drone' ? 1.6 : boss ? 2.45 : 2.3), z: actor.z });
     view.label.visible = actor.alive && point !== null && world.phase !== 'ready';
     if (point) view.label.position.copyFrom(point);
-    const labelText = `${ENEMY_NAMES[actor.kind]}  ${Math.round(actor.damage)}%${actor.guard > 0 ? `\n▰ GUARD ${Math.ceil(actor.guard)}` : actor.mount > 0 ? `\n▰ MOUNT ${Math.ceil(actor.mount)}` : ''}`;
+    const labelText = `${actor.kind === 'minion' ? '' : `${ENEMY_NAMES[actor.kind]}  `}${Math.round(actor.damage)}%${actor.guard > 0 ? `\n▰ GUARD ${Math.ceil(actor.guard)}` : actor.mount > 0 ? `\n▰ MOUNT ${Math.ceil(actor.mount)}` : ''}`;
     if (view.label.text !== labelText) view.label.text = labelText;
     view.label.style.fill = actor.damage > 110 ? 0xff695f : actor.damage > 65 ? 0xffc27b : COLORS[actor.kind];
 
@@ -704,7 +721,7 @@ export class GameScene {
         slash.visible = slash.visible && motion.trail;
       }
     }
-    view.danger.visible = actor.alive && actor.kind !== 'player' && actor.telegraph > 0 && actor.state === 'attack';
+    view.danger.visible = actor.alive && actor.kind !== 'player' && actor.telegraph > 0 && actor.state === 'attack' && !attack?.name.startsWith('GRID /');
     if (view.danger.visible && attack) {
       const ranged = attack.name.includes('SHOT') || attack.name.includes('LASER');
       const rush = attack.name === 'RAIL CHARGE' || attack.name === 'SHOCK DIVE' || attack.name === 'RIDER PASS';
@@ -812,6 +829,38 @@ export class GameScene {
     if (projectile.target) entry.target.position.set(projectile.target.x, 0.065, projectile.target.z);
   }
 
+  private updateHazards(world: WorldState): void {
+    const ids = new Set<string>();
+    for (const zone of world.hazards) {
+      ids.add(zone.id);
+      let entry = this.hazards.get(zone.id);
+      if (!entry) {
+        const root = new Container3D(); this.view.root.addChild(root);
+        const fill = this.box(root, this.warningMaterial, 0, 0, 0, zone.width, 0.025, zone.depth);
+        const edge = this.glow(0xffb65e);
+        for (const z of [-zone.depth / 2, zone.depth / 2]) this.box(root, edge, 0, 0.02, z, zone.width, 0.025, 0.045);
+        for (const x of [-zone.width / 2, zone.width / 2]) this.box(root, edge, x, 0.02, 0, 0.045, 0.025, zone.depth);
+        const progress = this.box(root, this.glow(0xffe1a0), 0, 0.04, 0, 1, 0.02, 0.07);
+        const label = new Text({ text: '', style: { fontFamily: 'monospace', fontSize: 13, fill: 0xffdfab, stroke: { color: 0x101827, width: 3 } } });
+        label.anchor.set(0.5); this.labels.addChild(label);
+        entry = { root, fill, progress, label }; this.hazards.set(zone.id, entry);
+      }
+      const active = zone.elapsed >= zone.delay;
+      entry.root.position.set(zone.x, 0.07, zone.z);
+      entry.fill.material = active ? this.glow(0xff6555) : this.warningMaterial;
+      entry.fill.scale.y = active ? 0.18 : 0.025;
+      entry.progress.scale.x = zone.width * Math.min(1, zone.elapsed / zone.delay);
+      const labelX = zone.width > 8 ? Math.max(zone.x - zone.width / 2 + 1, Math.min(zone.x + zone.width / 2 - 1, world.player.x - 3)) : zone.x;
+      const point = this.view.worldToScreen({ x: labelX, y: 0.4, z: zone.z });
+      entry.label.visible = point !== null;
+      if (point) entry.label.position.copyFrom(point);
+      entry.label.text = active ? '▲ DANGER ▲' : `⚠ ${zone.pattern.toUpperCase()} ${(zone.delay - zone.elapsed).toFixed(1)}`;
+    }
+    for (const [id, entry] of this.hazards) if (!ids.has(id)) {
+      entry.root.destroy({ children: true }); entry.label.destroy(); this.hazards.delete(id);
+    }
+  }
+
   update(world: WorldState, dt: number): void {
     if (this.destroyed) return;
     if (this.playerColor !== world.loadout.color) {
@@ -821,7 +870,7 @@ export class GameScene {
     }
     if (world.sector !== this.currentSector) {
       this.currentSector = world.sector;
-      this.scenery.position.x = world.sector * 28;
+      this.scenery.position.x = world.sector * SECTOR_SPAN;
       this.cameraX = world.cameraX;
       this.rebuildStage(world.sector);
     }
@@ -834,6 +883,7 @@ export class GameScene {
     this.view.camera.lookAt({ x: this.cameraX, y: 1.1 + shakeY, z: -0.4 });
     this.sun.shadow.bounds = Box.fromCenterSize({ x: world.cameraX, y: 4, z: 0 }, { x: 30, y: 16, z: 15 });
     this.updateProps(world);
+    this.updateHazards(world);
 
     const aliveIds = new Set<string>();
     for (const actor of [world.player, ...world.enemies]) {

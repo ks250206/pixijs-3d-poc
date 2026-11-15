@@ -1,7 +1,8 @@
 import { createCandidates, seededRandom } from './loadouts';
 import { createArena, insideProp } from './arena';
-import { STAGES, TRAINING_WAVES } from './campaign';
-import { EMPTY_INPUT, type Actor, type ActorKind, type ArenaProp, type AttackDirection, type AttackKind, type Effect, type GameMode, type InputFrame, type Loadout, type Projectile, type SupplyChoice, type WorldState } from './types';
+import { ARENA_HALF_WIDTH, SECTOR_SPAN, STAGES, TRAINING_WAVES } from './campaign';
+import { createPattern, insideHazard } from './patterns';
+import { EMPTY_INPUT, type Actor, type ActorKind, type AreaHazard, type ArenaProp, type AttackDirection, type AttackKind, type Effect, type GameMode, type InputFrame, type Loadout, type Projectile, type SupplyChoice, type WorldState } from './types';
 
 const GRAVITY = 27;
 const PLATFORM_DEPTH = 4.5;
@@ -34,7 +35,6 @@ interface ActorMemory {
   recoveryUsed: boolean;
   lastJumpHeld: boolean;
   charge: number;
-  chargeSource: 'smash' | 'attack';
   chargeDirection: AttackDirection;
   strike: Strike | null;
   comboStage: number;
@@ -79,11 +79,11 @@ export class GameEngine {
       phase: 'ready', mode: 'campaign', time: 0, seed: seed >>> 0,
       sector: 0, completedSectors: 0, supplyClaimed: false, supply: null, wave: 1, player,
       enemies: [this.makeActor('scout', 2, -1), this.makeActor('bruiser', 6, 0.8), this.makeActor('drone', 8, -2)],
-      projectiles: [], effects: [], props: createArena(0), loadout,
+      projectiles: [], hazards: [], effects: [], props: createArena(0), loadout,
       stocks: 3, kills: 0, combo: 0, bestCombo: 0, score: 0,
       lastMove: 'SYSTEM READY', message: 'BREAK THE DIRECTIVE', messageTime: 0,
       shake: 0, hitstop: 0, specialCooldown: 0, waveTimer: 0,
-      cameraX: 0, arenaMin: -11, arenaMax: 11, events: [],
+      cameraX: 0, arenaMin: -ARENA_HALF_WIDTH, arenaMax: ARENA_HALF_WIDTH, events: [],
     };
   }
 
@@ -99,11 +99,11 @@ export class GameEngine {
     const player = this.makeActor('player', -5, 0);
     this.world = {
       phase: 'playing', mode, time: 0, seed, sector: 0, completedSectors: 0, supplyClaimed: false, supply: null, wave: 1,
-      player, enemies: [], projectiles: [], effects: [], props: createArena(0), loadout,
+      player, enemies: [], projectiles: [], hazards: [], effects: [], props: createArena(0), loadout,
       stocks: 3, kills: 0, combo: 0, bestCombo: 0, score: 0,
       lastMove: 'SYSTEM ONLINE', message: mode === 'training' ? 'TRAINING // 機体を試そう' : '01 // THE FOUNDRY', messageTime: 3,
       shake: 0, hitstop: 0, specialCooldown: 0, waveTimer: 0,
-      cameraX: 0, arenaMin: -11, arenaMax: 11, events: [],
+      cameraX: 0, arenaMin: -ARENA_HALF_WIDTH, arenaMax: ARENA_HALF_WIDTH, events: [],
     };
     player.invulnerable = 1.8;
     this.spawnWave();
@@ -138,9 +138,9 @@ export class GameEngine {
     w.sector++;
     w.supplyClaimed = false; w.supply = null;
     w.wave = 1;
-    w.arenaMin = w.sector * 28 - 11;
-    w.arenaMax = w.sector * 28 + 11;
-    w.cameraX = w.sector * 28;
+    w.arenaMin = w.sector * SECTOR_SPAN - ARENA_HALF_WIDTH;
+    w.arenaMax = w.sector * SECTOR_SPAN + ARENA_HALF_WIDTH;
+    w.cameraX = w.sector * SECTOR_SPAN;
     w.player.x = w.arenaMin + 3;
     w.player.z = 0;
     w.player.y = 0;
@@ -153,7 +153,7 @@ export class GameEngine {
     w.player.attack = null;
     this.resetMemory(w.player);
     w.effects = [];
-    w.projectiles = [];
+    w.projectiles = []; w.hazards = [];
     w.enemies = [];
     w.props = createArena(w.sector);
     this.shots.clear();
@@ -213,6 +213,7 @@ export class GameEngine {
     if (w.phase !== 'sector-clear') for (const enemy of w.enemies) this.updateEnemy(enemy, dt);
     for (const actor of [w.player, ...w.enemies]) if (actor.alive) this.updateAttack(actor, dt);
     this.updateProjectiles(dt);
+    this.updateHazards(dt);
     for (const actor of [w.player, ...w.enemies]) if (actor.alive) this.integrate(actor, dt, actor.kind === 'player' ? input : EMPTY_INPUT);
     this.updateArena(dt);
     this.updateGrabPositions(dt);
@@ -236,7 +237,7 @@ export class GameEngine {
       w.waveTimer += dt;
       if (w.waveTimer > 1.35) this.completeWave();
     }
-    const targetCamera = w.sector * 28 + clamp(w.player.x - w.sector * 28, -4, 4) * 0.28;
+    const targetCamera = w.sector * SECTOR_SPAN + clamp(w.player.x - w.sector * SECTOR_SPAN, -8, 8) * 0.55;
     w.cameraX += (targetCamera - w.cameraX) * Math.min(1, dt * 3.5);
   }
 
@@ -255,7 +256,7 @@ export class GameEngine {
   private resetMemory(actor: Actor): void {
     this.memories.set(actor.id, {
       actionTimer: 0, forced: 0, jumps: 0, airDodgeUsed: false, airDodgeDown: false, recoveryUsed: false, lastJumpHeld: false,
-      charge: 0, chargeSource: 'smash', chargeDirection: 'forward', strike: null,
+      charge: 0, chargeDirection: 'forward', strike: null,
       comboStage: 0, comboTimer: 0, dashTimer: 0,
       cooldown: 0.7 + this.random() * 1.5, pattern: 0, grabTarget: null, grabbedBy: null,
       grabTimer: 0, respawnTimer: 0, spawnTime: 0, bossBroken: false, hazardCooldown: 0,
@@ -296,7 +297,7 @@ export class GameEngine {
       if (p.attack) p.attack.charge = m.charge;
       p.vx *= Math.exp(-dt * 18);
       p.vz *= Math.exp(-dt * 18);
-      const held = m.chargeSource === 'smash' ? input.smashHeld : input.attackHeld;
+      const held = input.smashHeld;
       if (!held || m.charge >= 1) this.releaseSmash();
       return;
     }
@@ -348,11 +349,10 @@ export class GameEngine {
     const actionGround = this.isGrounded(p);
     if (free && input.special && w.specialCooldown <= 0) { this.special(input); return; }
     if (free && input.grab && actionGround) { this.grab(); return; }
-    if (free && (input.smash || (input.attack && (Math.abs(input.flickX) > 0.4 || Math.abs(input.flickZ) > 0.4))) && actionGround) {
+    if (free && input.smash && actionGround) {
       const facing = input.moveX > 0.3 ? 1 : input.moveX < -0.3 ? -1 : p.facing;
       p.facing = facing;
       m.charge = 0;
-      m.chargeSource = input.smash ? 'smash' : 'attack';
       m.chargeDirection = this.direction(input, facing);
       if (m.chargeDirection === 'neutral') m.chargeDirection = 'forward';
       p.state = 'charge'; p.stateTime = 0;
@@ -463,6 +463,8 @@ export class GameEngine {
     if (!attack || !strike || actor.state !== 'attack') return;
     attack.elapsed += dt;
     actor.telegraph = attack.elapsed < strike.activeStart ? 1 - attack.elapsed / strike.activeStart : 0;
+    // Area casts resolve through their visible floor footprints, not a melee box.
+    if (attack.name.startsWith('GRID /')) return;
     if (attack.name === 'LEAP STRIKE' && attack.elapsed > strike.activeEnd) {
       actor.vx = approach(actor.vx, 0, dt * 24);
       actor.vz = approach(actor.vz, 0, dt * 24);
@@ -627,9 +629,27 @@ export class GameEngine {
 
   private updateEnemy(enemy: Actor, dt: number): void {
     const w = this.world, p = w.player;
-    if (!enemy.alive || !p.alive) return;
+    if (!enemy.alive) return;
     const m = this.memory(enemy);
-    if (enemy.state === 'grabbed' || enemy.state === 'hurt' || enemy.state === 'attack') return;
+    if (enemy.state === 'recover') {
+      enemy.vx = approach(enemy.vx, clamp((clamp(enemy.x, w.arenaMin + 2, w.arenaMax - 2) - enemy.x) * 4, -8, 8), dt * 12);
+      enemy.vz = approach(enemy.vz, clamp(-enemy.z * 3, -6, 6), dt * 12);
+      return;
+    }
+    if (enemy.state === 'grabbed' || enemy.state === 'hurt') return;
+    if (w.mode !== 'training' && !this.onPlatform(enemy) && !m.recoveryUsed && m.forced <= 0 && enemy.y > -3.5 && enemy.y < 5
+      && enemy.x > w.arenaMin - 5 && enemy.x < w.arenaMax + 5 && Math.abs(enemy.z) < 7) {
+      m.recoveryUsed = true; m.actionTimer = 0.75; m.forced = 0.75;
+      m.strike = null;
+      enemy.state = 'recover'; enemy.stateTime = 0;
+      enemy.attack = null; enemy.telegraph = 0; enemy.aim = null;
+      enemy.vx = clamp((clamp(enemy.x, w.arenaMin + 2, w.arenaMax - 2) - enemy.x) * 4, -8, 8);
+      enemy.vz = clamp(-enemy.z * 3, -6, 6); enemy.vy = enemy.kind === 'drone' ? 17 : 15.5;
+      this.effect('trail', enemy.x, enemy.y, enemy.z, 0.6, 2, 0x70dfff);
+      this.effect('text', enemy.x, enemy.y + 1.8, enemy.z, 0.8, 1, 0x70dfff, 'BOOST RECOVERY');
+      return;
+    }
+    if (!p.alive || enemy.state === 'attack') return;
     enemy.telegraph = 0;
     enemy.aim = null;
     const dx = p.x - enemy.x, dz = p.z - enemy.z;
@@ -645,10 +665,10 @@ export class GameEngine {
     }
     enemy.facing = dx >= 0 ? 1 : -1;
     const boss = enemy.kind === 'boss' || enemy.kind === 'warden';
-    const ranged = enemy.kind === 'gunner' || enemy.kind === 'artillery' || enemy.kind === 'captain';
+    const ranged = ['gunner', 'artillery', 'captain', 'sniper', 'sapper'].includes(enemy.kind);
     const mounted = enemy.kind === 'rider' && enemy.mount > 0;
     const rush = enemy.kind === 'charger' || enemy.kind === 'drone' || mounted;
-    const reach = boss ? 3.4 : enemy.kind === 'artillery' ? 10 : enemy.kind === 'captain' ? 4.5 : ranged ? 6.8 : rush ? 5.5 : enemy.kind === 'leaper' ? 4.8 : 2;
+    const reach = boss ? 3.4 : enemy.kind === 'sniper' ? 12 : enemy.kind === 'sapper' ? 5 : enemy.kind === 'artillery' ? 10 : enemy.kind === 'captain' ? 4.5 : ranged ? 6.8 : rush ? 5.5 : enemy.kind === 'leaper' ? 4.8 : 2;
     const speed = mounted ? 4.4 : enemy.kind === 'minion' ? 4.1 : enemy.kind === 'artillery' ? 1.6 : enemy.kind === 'bruiser' ? 2 : boss ? 1.65 : enemy.kind === 'sentinel' ? 2.2 : enemy.kind === 'scout' ? 3.8 : 3.1;
     const slot = w.enemies.indexOf(enemy);
     // Scouts approach different flanks; support units maintain firing distance.
@@ -690,17 +710,22 @@ export class GameEngine {
     enemy.state = Math.hypot(enemy.vx, enemy.vz) > 0.3 ? 'run' : 'idle';
     // At most two simultaneous attacks, leaving openings in a crowded wave.
     const attackers = w.enemies.filter((other) => other.alive && other !== enemy && other.state === 'attack').length;
-    const canReach = Math.abs(dx) <= (boss ? 9 : reach + 0.3) && Math.abs(dz) < (enemy.kind === 'artillery' ? 7 : boss ? 2.4 : ranged ? 1.8 : 1.15);
+    const canReach = boss || (Math.abs(dx) <= reach + 0.3 && Math.abs(dz) < (['artillery', 'sniper', 'sapper'].includes(enemy.kind) ? 7 : ranged ? 1.8 : 1.15));
     if (!canReach || m.cooldown > 0 || (!boss && attackers >= 2)) return;
     enemy.vx = 0; enemy.vz = 0;
     m.pattern++;
     m.cooldown = boss ? (enemy.armor > 0 ? 2.3 : 1.8) : enemy.kind === 'charger' ? 3.1 : 1.8 + this.random() * 0.9;
     if (boss) {
-      const pattern = m.pattern % 3;
-      const windup = enemy.armor > 0 ? 1 : 0.85;
-      if (Math.abs(dx) > 5 || pattern === 0) this.beginAttack(enemy, 'enemy', 'forward', 'MAINFRAME / LASER', 1.2, 9, 0, { damage: 16, force: 9, growth: 0.07, projectile: true, activeStart: 0.72 * windup, activeEnd: 0.8 });
-      else if (pattern === 1) this.beginAttack(enemy, 'enemy', 'down', 'MAINFRAME / SLAM', 1.25, 4.6, 0, { damage: 21, force: 10, growth: 0.075, radial: true, depth: 3.5, height: 1.4, activeStart: 0.75 * windup, activeEnd: 0.96, angle: 0.85 });
-      else this.beginAttack(enemy, 'enemy', 'forward', 'MAINFRAME / SWEEP', 1.1, 5.1, 0, { damage: 18, force: 11, growth: 0.07, depth: 2.9, height: 4, activeStart: 0.62 * windup, activeEnd: 0.86 });
+      const pattern = (m.pattern - 1) % 4;
+      if (pattern !== 1) this.castArea(enemy, pattern === 0 ? 'lanes' : pattern === 2 ? 'cross' : 'sweep');
+      else {
+        const windup = enemy.armor > 0 ? 1 : 0.85;
+        if (Math.abs(dx) > 5) this.beginAttack(enemy, 'enemy', 'forward', 'MAINFRAME / LASER', 1.2, 9, 0, { damage: 16, force: 9, growth: 0.07, projectile: true, activeStart: 0.72 * windup, activeEnd: 0.8 });
+        else if (Math.floor(m.pattern / 4) % 2 === 0) this.beginAttack(enemy, 'enemy', 'down', 'MAINFRAME / SLAM', 1.25, 4.6, 0, { damage: 21, force: 10, growth: 0.075, radial: true, depth: 3.5, height: 1.4, activeStart: 0.75 * windup, activeEnd: 0.96, angle: 0.85 });
+        else this.beginAttack(enemy, 'enemy', 'forward', 'MAINFRAME / SWEEP', 1.1, 5.1, 0, { damage: 18, force: 11, growth: 0.07, depth: 2.9, height: 4, activeStart: 0.62 * windup, activeEnd: 0.86 });
+      }
+    } else if (enemy.kind === 'sniper' || enemy.kind === 'sapper') {
+      this.castArea(enemy, enemy.kind === 'sniper' ? 'snipe' : 'mine');
     } else if (enemy.kind === 'artillery') {
       m.cooldown = 3.8;
       this.beginAttack(enemy, 'enemy', 'up', 'MORTAR SALVO', 1.55, 12, 0, { projectile: true, activeStart: 0.7, activeEnd: 0.8, damage: 12, force: 7 });
@@ -723,6 +748,31 @@ export class GameEngine {
     } else {
       this.beginAttack(enemy, 'enemy', 'forward', 'SERVO STRIKE', 0.8, 2.2, 0, { damage: enemy.kind === 'minion' ? 4 : 7, force: enemy.kind === 'minion' ? 3.5 : 5, growth: 0.055, activeStart: 0.36, activeEnd: 0.5 });
     }
+  }
+
+  private castArea(enemy: Actor, pattern: AreaHazard['pattern']): void {
+    const w = this.world, m = this.memory(enemy);
+    const enraged = (enemy.kind === 'boss' || enemy.kind === 'warden') && enemy.armor <= 0;
+    const zones = createPattern(pattern, `area-${this.serial++}`, enemy.id, w.arenaMin, w.arenaMax, w.player, Math.floor((m.pattern - 1) / 4), enraged);
+    w.hazards.push(...zones);
+    const duration = Math.max(...zones.map(h => h.delay + h.duration)) + 0.7;
+    m.cooldown = duration + (enraged ? 0.6 : 1.1);
+    this.beginAttack(enemy, 'enemy', 'down', `GRID / ${pattern.toUpperCase()}`, duration, 0, 0, { activeStart: zones[0]!.delay, activeEnd: duration - 0.7, damage: 0, force: 0 });
+  }
+
+  private updateHazards(dt: number): void {
+    const w = this.world, p = w.player;
+    w.hazards = w.hazards.filter(h => w.enemies.some(e => e.id === h.ownerId && e.alive));
+    for (const zone of w.hazards) {
+      zone.elapsed += dt;
+      if (zone.hit || zone.elapsed < zone.delay || zone.elapsed >= zone.delay + zone.duration) continue;
+      if (!p.alive || p.invulnerable > 0 || p.y < 0 || p.y >= zone.height || !insideHazard(zone, p.x, p.z)) continue;
+      const owner = w.enemies.find(e => e.id === zone.ownerId)!;
+      this.hit(p, owner, zone.damage, zone.force, 0.055, 0.8, p.x > owner.x ? 1 : -1, 'enemy');
+      // Intersecting arms of one cross/salvo cannot stack damage on one fighter.
+      for (const sibling of w.hazards) if (sibling.group === zone.group) sibling.hit = true;
+    }
+    w.hazards = w.hazards.filter(h => h.elapsed < h.delay + h.duration);
   }
 
   private fireAttack(actor: Actor, strike: Strike): void {
@@ -865,7 +915,7 @@ export class GameEngine {
         w.shake = 0.75;
       }
     }
-    const weight = target.kind === 'player' ? w.loadout.weight : target.kind === 'boss' ? 1.85 : target.kind === 'warden' ? 1.5 : target.mount > 0 ? 1.4 : target.kind === 'minion' ? 0.6 : target.kind === 'bruiser' ? 1.45 : target.kind === 'drone' ? 0.78 : 1;
+    const weight = target.kind === 'player' ? w.loadout.weight : target.kind === 'boss' ? 3.6 : target.kind === 'warden' ? 2.6 : target.mount > 0 ? 1.4 : target.kind === 'minion' ? 0.6 : target.kind === 'bruiser' ? 1.45 : target.kind === 'drone' ? 0.78 : 1;
     const impulse = (force + target.damage * growth) / weight * (armored ? 0.16 : 1) * launchScale;
     target.vx = facing * Math.cos(angle) * impulse;
     target.vy = Math.sin(angle) * impulse;
@@ -1020,6 +1070,7 @@ export class GameEngine {
     if (!actor.alive) return;
     const w = this.world;
     actor.alive = false; actor.state = 'dead'; actor.stateTime = 0; actor.attack = null; actor.telegraph = 0;
+    w.hazards = w.hazards.filter(h => h.ownerId !== actor.id);
     const m = this.memory(actor);
     if (m.grabTarget) this.releaseGrab(actor);
     if (m.grabbedBy) this.releaseGrab(w.player);
@@ -1062,7 +1113,7 @@ export class GameEngine {
 
   private respawn(): void {
     const w = this.world, p = w.player;
-    p.alive = true; p.x = w.sector * 28 - 4; p.y = 3; p.z = 0;
+    p.alive = true; p.x = w.sector * SECTOR_SPAN - 4; p.y = 3; p.z = 0;
     p.vx = 0; p.vy = 0; p.vz = 0; p.damage = 0;
     p.invulnerable = 3; p.state = 'fall'; p.stateTime = 0; p.attack = null;
     this.resetMemory(p);
@@ -1075,8 +1126,8 @@ export class GameEngine {
     const kinds = w.mode === 'training' ? TRAINING_WAVES[(w.wave - 1) % TRAINING_WAVES.length]! : STAGES[w.sector]!.waves[w.wave - 1]!.enemies;
     for (let index = 0; index < kinds.length; index++) {
       const kind = kinds[index]!;
-      const x = w.sector * 28 + (kind === 'boss' || kind === 'warden' ? 5 : 1.5 + index * 2.1);
-      const z = kind === 'boss' ? 0 : [-1.7, 1.7, 0, -2.4][index % 4]!;
+      const x = w.sector * SECTOR_SPAN + (kind === 'boss' || kind === 'warden' ? 5 : 1.5 + Math.floor(index / 4) * 2.6);
+      const z = kind === 'boss' ? 0 : [-2.7, 2.7, -0.9, 0.9][index % 4]!;
       const enemy = this.makeActor(kind, x, z);
       this.memory(enemy).spawnTime = w.time + index;
       enemy.invulnerable = 0.6 + index * 0.1;
@@ -1114,7 +1165,7 @@ export class GameEngine {
       w.message = 'SECTOR CLEAR // 補給を選び、次の戦場へ'; w.messageTime = 99;
       w.player.damage = Math.max(0, w.player.damage - 10);
       w.score += 600;
-      w.projectiles = [];
+      w.projectiles = []; w.hazards = [];
       this.shots.clear();
     }
   }

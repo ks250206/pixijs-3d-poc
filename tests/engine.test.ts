@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vite-plus/test';
-import { STAGES } from '../src/game/campaign';
+import { ARENA_HALF_WIDTH, SECTOR_SPAN, STAGES } from '../src/game/campaign';
 import { GameEngine } from '../src/game/engine';
 import { createCandidates } from '../src/game/loadouts';
+import { insideHazard } from '../src/game/patterns';
 import { EMPTY_INPUT, type InputFrame } from '../src/game/types';
 
 const frame = (input: Partial<InputFrame> = {}): InputFrame => ({ ...EMPTY_INPUT, ...input });
@@ -231,17 +232,17 @@ describe('campaign', () => {
     expect(game.world.sector).toBe(0);
   });
 
-  it('clears two waves, unlocks a gate, and transitions to the next sector', () => {
+  it('clears the opening waves, unlocks a gate, and transitions to the next sector', () => {
     const game = new GameEngine(51);
     game.start(createCandidates(51)[0]!);
-    for (let wave = 0; wave < 2; wave++) {
+    for (let wave = 0; wave < STAGES[0]!.waves.length; wave++) {
       for (const enemy of game.world.enemies) enemy.x = game.world.arenaMax + 6;
       step(game, 90);
     }
     expect(game.world.phase).toBe('sector-clear');
     game.nextSector();
     expect(game.world.sector).toBe(1);
-    expect(game.world.arenaMin).toBe(17);
+    expect(game.world.arenaMin).toBe(SECTOR_SPAN - ARENA_HALF_WIDTH);
     expect(game.world.wave).toBe(1);
     expect(game.world.enemies.some((enemy) => enemy.alive)).toBe(true);
   });
@@ -265,9 +266,9 @@ describe('campaign', () => {
     expect(boss.armor).toBeGreaterThan(0);
     game.world.mode = 'training'; // Isolate armor/launch mechanics from the boss AI.
     for (let attempt = 0; attempt < 3 && boss.armor > 0; attempt++) {
-      game.world.player.x = game.world.sector * 28 - 2; game.world.player.z = 0; game.world.player.y = 0;
+      game.world.player.x = game.world.sector * SECTOR_SPAN - 2; game.world.player.z = 0; game.world.player.y = 0;
       game.world.player.vx = 0; game.world.player.vy = 0;
-      boss.x = game.world.sector * 28; boss.z = 0; boss.y = 0; boss.vx = 0; boss.vy = 0;
+      boss.x = game.world.sector * SECTOR_SPAN; boss.z = 0; boss.y = 0; boss.vx = 0; boss.vy = 0;
       boss.invulnerable = 0;
       game.update(1 / 60, frame({ smash: true, smashHeld: true }));
       step(game, 53, { smashHeld: true });
@@ -301,12 +302,13 @@ describe('campaign', () => {
     let nextDodge = 0;
     // This player has no world writes, damage overrides, teleports or invincibility.
     // It builds damage with quick strikes before charging finishers, jumps telegraphed attacks and
-    // uses aerials/recovery. It exercises all gates and the final boss together.
-    for (let tick = 0; tick < 60 * 300; tick++) {
+    // uses aerials/recovery and visible floor warnings. Supplies use the same
+    // public action as the map buttons; combat still uses ordinary input frames.
+    for (let tick = 0; tick < 60 * 600; tick++) {
       const w = game.world, p = w.player;
       if (w.phase === 'won' || w.phase === 'lost') break;
       const input = frame();
-      if (w.phase === 'sector-clear') input.moveX = 1;
+      if (w.phase === 'sector-clear') { game.claimSupply(w.stocks < 3 ? 'stock' : 'repair'); input.moveX = 1; }
       else if (p.alive) {
         const targets = w.enemies.filter((enemy) => enemy.alive).sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z));
         const target = targets[0];
@@ -315,15 +317,31 @@ describe('campaign', () => {
           const outside = p.x < w.arenaMin || p.x > w.arenaMax;
           if (outside && p.y < 2 && w.specialCooldown <= 0) {
             input.moveZ = -1; input.moveX = Math.sign((w.arenaMin + w.arenaMax) / 2 - p.x); input.special = true;
-          } else if (p.state === 'charge') input.smashHeld = (p.attack?.charge ?? 0) < 0.6;
+          } else if (p.state === 'charge') input.smashHeld = (p.attack?.charge ?? 0) < 0.6 && !w.hazards.some(h => !h.hit && insideHazard(h, p.x, p.z));
           else if (p.state === 'hurt') input.moveX = Math.sign((w.arenaMin + w.arenaMax) / 2 - p.x);
           else {
             input.moveX = Math.abs(dx) > 2.1 ? Math.sign(dx) : 0;
             input.moveZ = Math.abs(dz) > 0.6 ? Math.sign(dz) : 0;
             const canAct = ['idle', 'run', 'jump', 'fall', 'wavedash'].includes(p.state);
+            const danger = w.hazards.filter(h => !h.hit && h.delay - h.elapsed < 1.2);
+            if (canAct && danger.some(h => insideHazard(h, p.x, p.z))) {
+              const safe = [] as { x: number; z: number; distance: number }[];
+              for (let x = w.arenaMin + 2; x <= w.arenaMax - 2; x += 1.5) for (const z of [-3.4, -1.5, 0, 1.5, 3.4]) {
+                if (danger.every(h => !insideHazard({ ...h, width: h.width + 0.7, depth: h.depth + 0.7 }, x, z))) safe.push({ x, z, distance: Math.hypot(x - p.x, (z - p.z) * 1.3) });
+              }
+              safe.sort((a, b) => a.distance - b.distance);
+              if (safe[0]) {
+                input.moveX = Math.abs(safe[0].x - p.x) > 0.2 ? Math.sign(safe[0].x - p.x) : 0;
+                input.moveZ = Math.abs(safe[0].z - p.z) > 0.2 ? Math.sign(safe[0].z - p.z) : 0;
+                if (danger.some(h => insideHazard(h, p.x, p.z) && h.delay - h.elapsed < 0.25)) input.dodge = true;
+                game.update(1 / 60, input); continue;
+              }
+            }
             const threat = targets.find((enemy) => enemy.attack && enemy.telegraph > 0 && enemy.telegraph < 0.4 && Math.abs(enemy.x - p.x) < (enemy.kind === 'boss' ? 6 : 3) && Math.abs(enemy.z - p.z) < 2.7);
             if (canAct && threat && tick > nextDodge && p.y <= 0.1) {
               input.jump = true; input.jumpHeld = true; nextDodge = tick + 30;
+            } else if (canAct && p.y <= 0.1 && w.specialCooldown <= 0 && targets.filter(e => Math.hypot(e.x - p.x, e.z - p.z) < 3.4).length >= 3) {
+              input.moveX = 0; input.moveZ = 1; input.special = true;
             } else if (canAct && p.y > 0.1 && Math.hypot(dx, dz) < 2.5 && Math.abs(dz) < 1) {
               input.attack = true; input.moveX = Math.sign(dx); input.moveZ = 0; lastAction = tick;
             } else if (canAct && Math.abs(dx) < 2.4 && Math.abs(dz) < 0.8 && tick - lastAction > 10) {
