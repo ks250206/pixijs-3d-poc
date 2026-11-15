@@ -181,6 +181,12 @@ export class GameScene {
       autoStart: false,
       powerPreference: 'high-performance',
     });
+    // Pixi itself can fall back to WebGL 1, but @pixi/3d requires WebGL 2.
+    if (app.renderer.type === RendererType.WEBGL
+      && (app.renderer as WebGLRenderer).context.webGLVersion !== 2) {
+      app.destroy(true, { children: true });
+      throw new Error('このデモには WebGL 2 が必要です。現在のブラウザーは WebGL 1 にフォールバックしました。');
+    }
     app.ticker.stop();
     app.canvas.setAttribute('aria-label', 'NULL UPRISING: 3D android combat arena');
     app.canvas.style.display = 'block';
@@ -641,6 +647,67 @@ export class GameScene {
     this.lamps.forEach((lamp, i) => { lamp.visible = Math.sin(world.time * 0.6 + i * 2.1) > -0.9; });
     this.flyingLights.forEach((light, i) => { light.x = ((world.time * (0.45 + i * 0.07) + i * 4) % 36) - 18; });
     this.app.render();
+  }
+
+  /**
+   * Opt-in rendering diagnostics. Call immediately after update(), in the same
+   * task, before the browser presents or clears its default drawing buffer.
+   * Reads the current target without changing any framebuffer or pipeline state.
+   */
+  public getDiagnostics(): object {
+    if (this.destroyed) return { backend: this.backend, destroyed: true };
+    const renderer = this.app.renderer;
+    const meshes = this.view.meshes.items;
+    const scene = {
+      backend: this.backend,
+      viewVisible: this.view.visible,
+      viewRenderable: this.view.isRenderable,
+      rootVisible: this.view.root.visible,
+      rootWorldVisible: Boolean(this.view.root.worldVisible),
+      meshCount: meshes.length,
+      activeMeshCount: meshes.filter((mesh) => mesh.worldVisible).length,
+      appResolution: renderer.resolution,
+      viewResolution: this.view.resolution,
+    };
+    if (renderer.type !== RendererType.WEBGL) {
+      return { ...scene, webGLVersion: null, pixelSamples: [] };
+    }
+    const webgl = renderer as WebGLRenderer;
+    const gl = webgl.gl;
+    const glError = gl.getError();
+    const framebufferStatus = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    const width = gl.drawingBufferWidth;
+    const height = gl.drawingBufferHeight;
+    const pixelSamples: { at: string; rgba: number[] }[] = [];
+    const pixel = new Uint8Array(4);
+    if (width > 0 && height > 0 && !gl.isContextLost()) {
+      // Positions are measured from the canvas's top left; GL reads from below.
+      for (const y of [0.4, 0.5, 0.6]) {
+        for (const x of [0.25, 0.5, 0.75]) {
+          pixel.fill(0);
+          gl.readPixels(
+            Math.min(width - 1, Math.floor(width * x)),
+            height - 1 - Math.min(height - 1, Math.floor(height * y)),
+            1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel,
+          );
+          pixelSamples.push({ at: `${Math.round(x * 100)}%,${Math.round(y * 100)}%`, rgba: Array.from(pixel) });
+        }
+      }
+    }
+    return {
+      ...scene,
+      webGLVersion: webgl.context.webGLVersion,
+      colorBufferFloat: Boolean(webgl.context.extensions.colorBufferFloat),
+      contextLost: gl.isContextLost(),
+      drawingBuffer: [width, height],
+      maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) as number,
+      defaultFramebuffer: gl.getParameter(gl.FRAMEBUFFER_BINDING) === null,
+      framebufferStatus,
+      framebufferComplete: framebufferStatus === gl.FRAMEBUFFER_COMPLETE,
+      glError,
+      readbackError: gl.getError(),
+      pixelSamples,
+    };
   }
 
   destroy(): void {

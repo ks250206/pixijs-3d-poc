@@ -32,6 +32,14 @@ async function main() {
   let disposed = false;
   let ui: GameUI;
   let pending: InputFrame = { ...EMPTY_INPUT };
+  let lastDiagnosticsTime = -Infinity;
+  const diagnostics = params.get('diagnostics') === '1' ? document.createElement('pre') : null;
+  if (diagnostics) {
+    diagnostics.id = 'render-diagnostics';
+    diagnostics.setAttribute('aria-label', '描画診断');
+    diagnostics.style.cssText = 'position:fixed;z-index:2000;top:76px;left:16px;max-width:420px;max-height:65vh;overflow:auto;padding:12px;color:#d9fff6;background:#071019ee;border:1px solid #62fff0;font:11px/1.45 monospace;white-space:pre-wrap;pointer-events:auto';
+    document.body.appendChild(diagnostics);
+  }
 
   function start(loadout: Loadout, mode: GameMode = 'campaign') {
     audio.unlock();
@@ -134,6 +142,11 @@ async function main() {
       accumulated -= 1 / 60;
     }
     scene.update(engine.world, dt);
+    if (diagnostics && now - lastDiagnosticsTime >= 1000) {
+      // Read the app's own framebuffer immediately after rendering, before presentation.
+      diagnostics.textContent = JSON.stringify({ fps: Math.round(fps), ...scene.getDiagnostics() }, null, 2);
+      lastDiagnosticsTime = now;
+    }
     ui.update(engine.world, { fps: Math.round(fps), backend: scene.backend });
     frameId = requestAnimationFrame(frame);
   }
@@ -169,6 +182,7 @@ async function main() {
     input.dispose();
     audio.dispose();
     ui.dispose();
+    diagnostics?.remove();
     scene.destroy();
   }
   import.meta.hot?.dispose(dispose);
