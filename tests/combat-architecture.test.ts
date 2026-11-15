@@ -426,3 +426,42 @@ describe("collision snapshot after movement", () => {
     expect(g.world.specialCooldown).toBe(0);
   });
 });
+
+describe("projectile hit-confirm cancels", () => {
+  it("allows a cannon normal that connected to cancel into jump", () => {
+    const g = lab(),
+      p = g.world.player,
+      t = g.world.enemies[0]!;
+    g.world.loadout.weapon = "cannon";
+    t.x = 2;
+    g.update(1 / 60, { ...EMPTY_INPUT, attack: true });
+    for (let i = 0; i < 60 && (t.damage === 0 || g.world.hitstop > 0 || p.attack!.elapsed * 60 < p.attack!.move!.frames.startup + 4); i++) tick(g, 1);
+    expect(t.damage).toBeGreaterThan(0);
+    expect(p.state).toBe("attack");
+    expect(p.attack!.elapsed * 60).toBeGreaterThanOrEqual(p.attack!.move!.frames.startup + 3);
+    g.update(1 / 60, { ...EMPTY_INPUT, jump: true });
+    expect(p.y).toBeGreaterThan(0);
+    expect(p.attack).toBeNull();
+  });
+  it("never confirms a later swing when an old cannon projectile arrives", () => {
+    const g = lab(),
+      p = g.world.player,
+      t = g.world.enemies[0]!;
+    g.world.loadout.weapon = "cannon";
+    t.x = 8.8;
+    g.update(1 / 60, { ...EMPTY_INPUT, attack: true });
+    while (p.attack) tick(g, 1);
+    g.update(1 / 60, { ...EMPTY_INPUT, attack: true });
+    const current = p.attack!;
+    while (
+      p.attack &&
+      (current.elapsed * 60 < current.move!.frames.startup + 3 || g.world.hitstop > 0)
+    )
+      tick(g, 1);
+    expect(t.damage).toBeGreaterThan(0);
+    expect(p.attack).toBe(current);
+    g.update(1 / 60, { ...EMPTY_INPUT, jump: true });
+    expect(p.attack).toBe(current);
+    expect(p.y).toBe(0);
+  });
+});

@@ -3,7 +3,7 @@
 Baseline: fresh `origin/main` `2108f94608e2054f8d68c5b879d4a32af4728412` (7 stages, 23 authored encounters, stage span 34, half width 14). Work was isolated from the root checkout. Node 26.13.1, pnpm 12.21.0, Vite+ 1.6.0, Pixi 8.23.0 / @pixi/3d 0.1.0. Dependency pins and the #6 single-worker, bounded CI viewport and 12-minute job limit are retained.
 
 - Typecheck: passed.
-- Logic: **134 tests / 9 files**, including ordinary-input completion of all seven stages and objective sectors 0/2/5. The finite bot budget is 15 simulated minutes to include the longer coordinated danger/recovery windows; the complete logic suite takes approximately one second locally.
+- Logic: **136 tests / 9 files**, including ordinary-input completion of all seven stages and objective sectors 0/2/5. The finite bot budget is 15 simulated minutes to include the longer coordinated danger/recovery windows; the complete logic suite takes approximately one second locally.
 - Existing Pages workflow unchanged; lint passed locally with no warnings. CI retains its existing typecheck / logic / build / browser sequence.
 - Production build: passed.
 - Playwright: **16 tests**, including actual WebGL2 canvas pixel checks, graphics presets, desktop and mobile touch/menu layouts, all six weapon selections, keyboard actions, objectives/phase indicators, and scene resource replacement.

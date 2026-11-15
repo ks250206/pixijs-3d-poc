@@ -4,7 +4,7 @@ The engine is a CPU-only simulation. `src/game/combat/moves.ts` owns the typed `
 
 `update` prepares attack timing and velocities, integrates actors, resolves floor/props/grabs/depth rails, then checks collisions. `AttackVisual.collision` stores the exact checked world capsule, and rendering consumes that snapshot. Moving phase/dash/falling aerial browser regressions compare it to the actual mesh rather than recomputing a render-only pose.
 
-`beginMove` creates one swing record with a per-target hit set. The engine and renderer consume the same resolved definition. Projectiles have separate ownership, hit memory, lifetime and pierce budgets; they do not reuse the melee capsule. A missed grab is an explicit non-hitting `none` behavior with zero active frames, never a distant timing sentinel.
+`beginMove` creates one swing record with a per-target hit set. The engine and renderer consume the same resolved definition. Projectiles have separate ownership, hit memory, lifetime and pierce budgets; they do not reuse the melee capsule. A projectile confirms only its originating swing while that exact swing is still current; a delayed old shot cannot grant the next move a hit cancel. A missed grab is an explicit non-hitting `none` behavior with zero active frames, never a distant timing sentinel.
 
 ## Coordinate and geometry contract
 

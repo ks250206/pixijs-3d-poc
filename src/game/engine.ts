@@ -63,6 +63,7 @@ interface ActorMemory {
 }
 
 interface ProjectileMemory {
+  originStrike?: Strike;
   hit?: Set<string>;
   pierce?: number;
   kind: AttackKind;
@@ -800,7 +801,7 @@ export class GameEngine {
         vx: facing * speed, vy: 0, vz: 0, radius: charged ? 0.38 : 0.22,
         life: actor.attack!.range / speed, color: w.loadout.color };
       w.projectiles.push(shot);
-      this.shots.set(shot.id, { kind: actor.attack!.kind, damage: strike.damage, force: strike.force, growth: strike.growth, facing: facing as 1 | -1 });
+      this.shots.set(shot.id, { originStrike: strike, kind: actor.attack!.kind, damage: strike.damage, force: strike.force, growth: strike.growth, facing: facing as 1 | -1 });
       this.effect('hit', shot.x, shot.y, shot.z, 0.18, charged ? 1 : 0.5, w.loadout.color);
       return;
     }
@@ -836,7 +837,7 @@ export class GameEngine {
         color: actor.kind === 'player' ? w.loadout.color : 0xff6b56,
       };
       w.projectiles.push(projectile);
-      this.shots.set(projectile.id, { kind: actor.attack?.kind ?? 'special', damage: strike.damage, force: strike.force, growth: strike.growth, facing: actor.facing, hit: new Set(), pierce: strike.move.id === 'special.pulse.focused' ? 2 : 1 });
+      this.shots.set(projectile.id, { originStrike: strike, kind: actor.attack?.kind ?? 'special', damage: strike.damage, force: strike.force, growth: strike.growth, facing: actor.facing, hit: new Set(), pierce: strike.move.id === 'special.pulse.focused' ? 2 : 1 });
     }
   }
 
@@ -874,7 +875,10 @@ export class GameEngine {
         if (!target.alive || target.invulnerable > 0 || shot.life <= 0 || data?.hit?.has(target.id)) continue;
         if (Math.abs(shot.x - target.x) < 0.55 * target.scale + shot.radius && Math.abs(shot.z - target.z) < 0.5 * target.scale + shot.radius && shot.y > target.y - 0.1 && shot.y < target.y + 1.85 * target.scale) {
           const data = this.shots.get(shot.id);
-          if (data) { this.hit(target, source, data.damage, data.force, data.growth, 0.45, data.facing, data.kind, shot); data.hit?.add(target.id); data.pierce = (data.pierce ?? 1) - 1; if (data.pierce <= 0) shot.life = 0; }
+          if (data) {
+            // A late projectile can confirm only the exact swing that fired it.
+            if (data.originStrike && source.state === 'attack' && this.memory(source).strike === data.originStrike) data.originStrike.connected = true;
+            this.hit(target, source, data.damage, data.force, data.growth, 0.45, data.facing, data.kind, shot); data.hit?.add(target.id); data.pierce = (data.pierce ?? 1) - 1; if (data.pierce <= 0) shot.life = 0; }
           else shot.life = 0;
         }
       }
