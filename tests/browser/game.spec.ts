@@ -1,3 +1,5 @@
+import type { GameScene } from '../../src/render/scene';
+import { EMPTY_INPUT } from '../../src/game/types';
 import { expect, test, type Page } from '@playwright/test';
 import type { WorldState } from '../../src/game/types';
 import type { GameEngine } from '../../src/game/engine';
@@ -163,10 +165,20 @@ test('cleared-stage supplies apply once and route departure enters the next stag
   await boot(page);
   await page.locator('[data-action=start]').click();
   await page.evaluate(() => {
-    const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; update: (dt: number) => void } } }).__UPRISING__.engine;
+    const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; update: GameEngine['update'] } } }).__UPRISING__.engine;
     for (let wave = 0; wave < 3; wave++) {
       engine.world.enemies.forEach((enemy) => { enemy.x = engine.world.arenaMax + 6; });
       for (let i = 0; i < 100; i++) engine.update(1 / 60);
+    }
+    for (let i = 0; i < 1500 && engine.world.phase === 'playing'; i++) {
+      const p = engine.world.player, target = engine.world.props.find(prop => prop.alive && prop.id.startsWith('objective-'));
+      const input = { moveX: 0, moveZ: 0, attack: false, attackHeld: false, smash: false, smashHeld: false, special: false, jump: false, jumpHeld: false, dodge: false, dodgeHeld: false, grab: false, dash: false, pause: false, flickX: 0, flickZ: 0 };
+      if (target) {
+        const dx = target.x - p.x, dz = target.z - p.z;
+        input.moveX = Math.abs(dx) > 1.3 ? Math.sign(dx) : 0; input.moveZ = Math.abs(dz) > .25 ? Math.sign(dz) : 0;
+        if (Math.abs(dx) < 1.8 && Math.abs(dz) < .4) { if (p.facing !== Math.sign(dx)) input.moveX = Math.sign(dx); else input.attack = true; }
+      }
+      engine.update(1 / 60, input);
     }
   });
   await expect.poll(async () => (await snapshot(page)).phase).toBe('sector-clear');
@@ -201,7 +213,7 @@ test('renders the expanded roster and distinct stage scenery', async ({ page }) 
   }
   for (let wave = 2; wave <= 5; wave++) {
     await page.evaluate(() => {
-      const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; update: (dt: number) => void } } }).__UPRISING__.engine;
+      const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; update: GameEngine['update'] } } }).__UPRISING__.engine;
       engine.world.enemies.forEach((enemy) => { enemy.x = engine.world.arenaMax + 6; });
       for (let i = 0; i < 100; i++) engine.update(1 / 60);
       engine.world.enemies.forEach((enemy) => { enemy.invulnerable = 0; });
@@ -365,4 +377,119 @@ test('touch controls work in landscape and menu fits portrait', async ({ browser
   await page.screenshot({ path: 'test-results/screenshots/04-mobile-portrait.png' });
   expect(errors).toEqual([]);
   await context.close();
+});
+
+
+test('lance mesh tip, trail and debug segment match authoritative world geometry', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
+  await boot(page); await page.locator('[data-weapon=lance]').click();
+  await expect(page.locator('[data-hud=selectedDescription]')).toContainText('上L: RISING CIRCUIT');
+  await page.locator('[data-mode=training]').click(); await page.locator('[data-action=start]').click();
+  await page.locator('[data-action=hitboxes]').click();
+  await expect(page.locator('[data-action=hitboxes]')).toHaveAttribute('aria-pressed','true');
+  for (const facing of [1,-1] as const) for (const direction of ['forward','back','up','down'] as const) {
+    const result = await page.evaluate(({ facing, direction, empty }) => {
+      const { engine, scene } = (window as unknown as { __UPRISING__: { engine: GameEngine; scene: GameScene } }).__UPRISING__;
+      engine.restart(); engine.world.props=[]; engine.world.enemies=[];engine.world.effects=[];engine.world.messageTime=0;
+      const p=engine.world.player; Object.assign(p,{x:0,y:3,z:.7,facing,invulnerable:0});
+      const moveX=direction==='forward'?facing:direction==='back'?-facing:0;
+      const moveZ=direction==='up'?-1:direction==='down'?1:0;
+      engine.update(1/60,{...empty,attack:true,moveX,moveZ});
+      const move=p.attack!.move!, samples=[];
+      for (const fraction of [.1,.5,.9]) {
+        const target=(move.frames.startup+move.frames.active*fraction)/60;
+        engine.world.hitstop=0;
+        while(p.attack!.elapsed<target-1e-8) engine.update(Math.min(1/60,target-p.attack!.elapsed),empty);
+        engine.world.hitstop=100; scene.update(engine.world,0); scene.app.render();
+        samples.push({ player:JSON.parse(JSON.stringify(p)), geometry:scene.combatGeometry(p.id) });
+      }
+      return samples;
+    }, { facing, direction, empty:EMPTY_INPUT });
+    for (const { player, geometry } of result) {
+      const expected=player.attack.collision.capsule;
+      expect(player.attack.collision.active).toBe(true);
+      expect(geometry.tip).not.toBeNull();expect(geometry.trail).not.toBeNull();expect(geometry.overlay).not.toBeNull();
+      for (const axis of ['x','y','z'] as const) {
+        expect(geometry.tip![axis]).toBeCloseTo(expected.b[axis],4);
+        for (const shape of [geometry.trail!,geometry.overlay!]) for (const end of ['a','b'] as const) expect(shape[end][axis]).toBeCloseTo(expected[end][axis],4);
+      }
+    }
+    if (facing===1 && direction==='forward') await page.screenshot({path:'test-results/screenshots/lance-forward-capsule.png'});
+    if (facing===-1 && direction==='up') await page.screenshot({path:'test-results/screenshots/lance-mirrored-up.png'});
+    if (facing===1 && direction==='down') await page.screenshot({path:'test-results/screenshots/lance-down-air.png'});
+  }
+  await expectRenderedArena(page);expect(errors).toEqual([]);
+});
+
+test('shows rolled module details, ground dash label, objectives and phase two indicators', async ({ page }) => {
+  await training(page);
+  await expect(page.locator('[data-hud=modules]')).toContainText('下L:');
+  await page.keyboard.press('Shift');
+  await expect.poll(async()=> (await snapshot(page)).lastMove).toBe('GROUND DASH');
+  await page.locator('.top-actions [data-action=help]').click();
+  await expect(page.getByText(/地上：向いている方向へダッシュ回避/)).toBeVisible();
+  await expect(page.getByText(/旧移動量の約2\/3/)).toBeVisible(); await page.keyboard.press('Escape');
+  await page.evaluate(({ empty })=>{
+    const {engine}=(window as unknown as {__UPRISING__:{engine:GameEngine}}).__UPRISING__;
+    engine.start(engine.world.loadout,'campaign');
+    engine.world.enemies.forEach(e=>e.x=engine.world.arenaMax+6);engine.update(1/60,empty);
+    engine.world.hitstop=100;
+  },{empty:EMPTY_INPUT});
+  await expect(page.locator('[data-hud=objective]')).toContainText('通信リレーを破壊 0/2');
+  await page.screenshot({path:'test-results/screenshots/relay-objective.png'});
+  await page.evaluate(({empty})=>{
+    const {engine}=(window as unknown as {__UPRISING__:{engine:GameEngine}}).__UPRISING__;
+    for(let i=0;i<6;i++){engine.world.phase='sector-clear';engine.nextSector();}
+    engine.world.wave=4;engine.world.enemies=[];engine.world.hitstop=0;
+    // Spawn the existing final wave through the normal update path.
+    engine.world.wave=3;for(let i=0;i<100;i++)engine.update(1/60,empty);
+    const boss=engine.world.enemies.find(e=>e.kind==='boss')!;
+    engine.world.props=[];engine.world.mode='training';
+    Object.assign(boss,{x:engine.world.arenaMin+10,z:0,armor:1,invulnerable:0});
+    Object.assign(engine.world.player,{x:boss.x-1.5,y:0,z:0,invulnerable:100});
+    engine.update(1/60,{...empty,attack:true});
+    for(let i=0;i<150;i++)engine.update(1/60,empty);
+    engine.world.mode='campaign';engine.world.hitstop=100;engine.world.messageTime=0;
+  },{empty:EMPTY_INPUT});
+  await expect(page.locator('[data-hud=bossHint]')).toContainText('PHASE 2 / OVERDRIVE');
+  await page.screenshot({path:'test-results/screenshots/boss-overdrive.png'});
+});
+
+
+test('keeps one player weapon root while army enemies and training runs are replaced', async ({ page }) => {
+  await training(page);
+  const counts=await page.evaluate(()=>{
+    const {engine,scene}=(window as unknown as {__UPRISING__:{engine:GameEngine;scene:GameScene}}).__UPRISING__;
+    const counts=[];
+    for(let cycle=0;cycle<8;cycle++){
+      engine.restart();engine.world.enemies=[];scene.update(engine.world,0);
+      counts.push(scene.getDiagnostics());
+    }
+    return counts as {weaponRootCount:number;actorViewCount:number;meshCount:number}[];
+  });
+  expect(counts.every(c=>c.weaponRootCount===1&&c.actorViewCount===1)).toBe(true);
+  expect(new Set(counts.map(c=>c.meshCount)).size).toBe(1);
+});
+
+
+test('moving phase, dash and falling aerial meshes use the actual capsule checked this tick', async ({ page })=>{
+  await training(page);
+  const samples=await page.evaluate(({empty})=>{
+    const {engine,scene}=(window as unknown as {__UPRISING__:{engine:GameEngine;scene:GameScene}}).__UPRISING__;
+    const samples=[];
+    for(const facing of [1,-1] as const)for(const motion of ['phase','dash','fall'] as const){
+      engine.restart();engine.world.loadout.weapon='lance';engine.world.loadout.modules.side='cross';engine.world.props=[];engine.world.enemies=[];engine.world.effects=[];engine.world.messageTime=0;
+      const p=engine.world.player;Object.assign(p,{x:0,y:motion==='fall'?4:0,z:0,vy:motion==='fall'?-18:0,facing,invulnerable:0});
+      engine.update(1/60,{...empty,moveX:facing,special:motion==='phase',attack:motion!=='phase',dash:motion==='dash'});
+      const move=p.attack!.move!;
+      while(p.attack!.elapsed*60<move.frames.startup+2)engine.update(1/60,empty);
+      scene.update(engine.world,0);scene.app.render();
+      samples.push({motion,facing,x:p.x,y:p.y,checked:structuredClone(p.attack!.collision),geometry:scene.combatGeometry(p.id)});
+    }
+    return samples;
+  },{empty:EMPTY_INPUT});
+  for(const s of samples){
+    expect(s.checked!.active).toBe(true);if(s.motion==='fall')expect(s.y).toBeLessThan(4);else expect(s.x*s.facing).toBeGreaterThan(.2);
+    for(const axis of ['x','y','z'] as const){expect(s.geometry.tip![axis]).toBeCloseTo(s.checked!.capsule.b[axis],4);for(const end of ['a','b'] as const)expect(s.geometry.trail![end][axis]).toBeCloseTo(s.checked!.capsule[end][axis],4);}
+  }
 });

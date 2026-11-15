@@ -84,7 +84,7 @@ describe('telegraphed area attacks', () => {
   function cast(kind: ActorKind = 'boss') {
     const { game, enemy } = fixture(kind);
     enemy.x = 8; game.world.mode = 'campaign';
-    for (let i = 0; i < 240 && !game.world.hazards.length; i++) tick(game);
+    for (let i = 0; i < 900 && !game.world.hazards.length; i++) tick(game);
     expect(game.world.hazards.length).toBeGreaterThan(0);
     return { game, enemy };
   }
@@ -105,7 +105,7 @@ describe('telegraphed area attacks', () => {
     const safeZ = [-3, 0, 3].find(z => game.world.hazards.every(h => !insideHazard(h, 0, z)))!;
     expect(safeZ).toBeDefined(); game.world.player.z = safeZ;
     tick(game, 100); expect(game.world.player.damage).toBe(0);
-    for (let i = 0; i < 240 && !game.world.hazards.length; i++) tick(game);
+    for (let i = 0; i < 900 && !game.world.hazards.length; i++) tick(game);
     expect(game.world.hazards.length).toBeGreaterThan(0);
     enemy.alive = false; tick(game); expect(game.world.hazards).toHaveLength(0);
   });

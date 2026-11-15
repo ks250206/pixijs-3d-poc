@@ -20,6 +20,12 @@ export function createPattern(pattern: AreaHazard['pattern'], group: string, own
       const column = variant % 2 ? 6 - i : i;
       add(min + cell * (column + 0.5), 0, cell - 0.15, 8.6, windup + i * 0.28);
     }
+  } else if (pattern === 'pincer') {
+    // Alternating outer columns converge; a broad central corridor always remains.
+    for (let i = 0; i < 3; i++) for (const sign of [-1, 1]) add(center + sign * (width / 2 - 2 - i * 2.4), 0, 3.3, 8.6, 1.15 + i * .45);
+  } else if (pattern === 'overload') {
+    // Two lane pulses separated by a full dodge/reposition interval.
+    for (let i = 0; i < 2; i++) for (let lane = 0; lane < 3; lane++) if (lane !== (variant + i) % 3) add(center, (lane - 1) * 3, width, 1.9, 1.2 + i * 1.15);
   } else if (pattern === 'snipe') add(center, target.z, width, 0.9, 1.3);
   else add(target.x, target.z, 2.8, 2.8, 1.5, 1.3);
   return zones;

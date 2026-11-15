@@ -1,3 +1,7 @@
+import type { Capsule } from './combat/geometry';
+import type { Coordination } from './director';
+import type { ObjectiveState } from './objectives';
+import type { MoveDefinition } from './combat/moves';
 export type ActorKind = 'player' | 'scout' | 'bruiser' | 'gunner' | 'drone' | 'sentinel' | 'charger' | 'leaper' | 'artillery' | 'rider' | 'captain' | 'minion' | 'sniper' | 'sapper' | 'warden' | 'boss';
 export type SupplyChoice = 'repair' | 'power' | 'stock';
 export type ActionState = 'idle' | 'run' | 'jump' | 'fall' | 'recover' | 'attack' | 'charge' | 'dodge' | 'airdodge' | 'wavedash' | 'hurt' | 'grab' | 'grabbed' | 'dead' | 'shield';
@@ -21,6 +25,7 @@ export interface Loadout {
   speed: number;
   weight: number;
   description: string;
+  modules: { weapon: 'quick' | 'breaker'; neutral: 'focused' | 'split'; side: 'cross' | 'push'; down: 'launch' | 'stagger' };
 }
 
 export interface InputFrame {
@@ -51,6 +56,8 @@ export const EMPTY_INPUT: InputFrame = {
 };
 
 export interface AttackVisual {
+  move?: MoveDefinition;
+  collision?: { capsule: Capsule; frame: number; active: boolean };
   name: string;
   kind: AttackKind;
   direction: AttackDirection;
@@ -64,6 +71,9 @@ export interface AttackVisual {
 }
 
 export interface Actor {
+  bossPhase: 'armored' | 'transition' | 'overdrive' | null;
+  phaseChanges: number;
+  tactic: string;
   id: string;
   kind: ActorKind;
   x: number;
@@ -110,7 +120,7 @@ export interface AreaHazard {
   id: string;
   group: string;
   ownerId: string;
-  pattern: 'lanes' | 'cross' | 'sweep' | 'snipe' | 'mine';
+  pattern: 'lanes' | 'cross' | 'sweep' | 'snipe' | 'mine' | 'pincer' | 'overload';
   x: number;
   z: number;
   width: number;
@@ -144,7 +154,7 @@ export interface GameEvent {
 
 export interface ArenaProp {
   id: string;
-  kind: 'crate' | 'barrel' | 'vent' | 'conveyor' | 'repair';
+  kind: 'crate' | 'barrel' | 'vent' | 'conveyor' | 'repair' | 'relay' | 'node';
   x: number;
   z: number;
   width: number;
@@ -158,6 +168,8 @@ export interface ArenaProp {
 }
 
 export interface WorldState {
+  objective: ObjectiveState;
+  coordination: Coordination;
   phase: GamePhase;
   mode: GameMode;
   time: number;

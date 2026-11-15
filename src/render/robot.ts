@@ -1,3 +1,5 @@
+import { sampleWeapon } from '../game/combat/geometry';
+import { WeaponView, worldMatrix } from './weapon';
 import {
   Container3D,
   CubeGeometry,
@@ -6,6 +8,7 @@ import {
   Mesh3D,
   SphereGeometry,
   TorusGeometry,
+  Matrix4, Vector3,
 } from '@pixi/3d';
 import type { Actor, ActorKind, WeaponId } from '../game/types';
 import { attackMotion } from './motion';
@@ -27,6 +30,7 @@ export interface RobotAssets {
 
 export class RobotView {
   readonly root = new Container3D();
+  readonly weaponView: WeaponView | null;
   readonly shadow = new Container3D();
   readonly marker: Mesh3D;
   readonly warning: Mesh3D;
@@ -57,6 +61,7 @@ export class RobotView {
 
   constructor(kind: ActorKind, private readonly assets: RobotAssets) {
     this.kind = kind;
+    this.weaponView = kind === 'player' ? new WeaponView(assets) : null;
     this.isDrone = kind === 'drone';
     this.root.label = `robot-${kind}`;
     const armor = assets.armor[kind];
@@ -356,13 +361,14 @@ export class RobotView {
     this.root.rotation.y = actor.facing * Math.PI / 2;
     this.root.rotation.z = 0;
     this.root.visible = actor.alive;
-    this.boosters.visible = actor.state === 'recover';
+    this.boosters.visible = actor.state === 'recover' || actor.bossPhase === 'overdrive';
+    this.marker.visible = actor.kind === 'player' || actor.bossPhase === 'overdrive';
     this.boosters.scale.y = 1 + Math.sin(time * 40) * 0.2;
     this.shadow.position.set(actor.x, 0.028, actor.z);
     this.shadow.scale.set(scale);
     this.shadow.visible = actor.alive && Math.abs(actor.z) < 4.5 && actor.y < 12;
     this.marker.rotation.y = time * 0.4;
-    this.warning.visible = actor.telegraph > 0 && !actor.attack?.name.startsWith('GRID /');
+    this.warning.visible = actor.telegraph > 0 && actor.attack?.move?.behavior !== 'area';
     if (this.warning.visible) {
       const radius = this.kind === 'boss' ? 1.6 : 1.1;
       const pulse = 1 + Math.sin(time * 28) * 0.06;
@@ -370,14 +376,15 @@ export class RobotView {
     }
     this.shield.visible = actor.state === 'shield' || actor.state === 'airdodge';
 
+    const authoritativeWeapon = this.weaponView?.update(actor) ?? false;
     if (this.kind === 'player') {
-      this.blade.visible = weapon === 'arc';
-      this.hammer.visible = weapon === 'pile';
-      this.fist.visible = weapon === 'razor';
-      this.offhand.visible = weapon === 'razor';
-      this.lance.visible = weapon === 'lance';
-      this.cannon.visible = weapon === 'cannon';
-      this.scythe.visible = weapon === 'scythe';
+      this.blade.visible = !authoritativeWeapon && weapon === 'arc';
+      this.hammer.visible = !authoritativeWeapon && weapon === 'pile';
+      this.fist.visible = !authoritativeWeapon && weapon === 'razor';
+      this.offhand.visible = !authoritativeWeapon && weapon === 'razor';
+      this.lance.visible = !authoritativeWeapon && weapon === 'lance';
+      this.cannon.visible = !authoritativeWeapon && weapon === 'cannon';
+      this.scythe.visible = !authoritativeWeapon && weapon === 'scythe';
       this.chassisDetails.forEach((detail, id) => { detail.visible = weapon === id; });
     }
     this.guardPlate.visible = actor.guard > 0;
@@ -407,6 +414,7 @@ export class RobotView {
     this.body.position.y = 0.95 + (mounted ? 0.5 : 0) + breathe + (running ? Math.abs(stride) * 0.055 : 0);
     this.leftLeg.y = this.rightLeg.y = 0.88 + (mounted ? 0.5 : 0);
     this.mountLegs.forEach((leg, index) => { leg.rotation.x = Math.sin(time * 18 + index * Math.PI) * Math.min(0.6, Math.abs(actor.vx) * 0.08); });
+    this.rightArm.scale.set(1);
     this.body.rotation.set(0, 0, 0);
     this.head.rotation.set(0, 0, 0);
     this.leftArm.rotation.set(running ? stride * 0.65 : -0.07, 0, 0.08);
@@ -458,8 +466,8 @@ export class RobotView {
         this.body.position.y -= 0.1;
         break;
       case 'dodge':
-        this.root.rotation.z = actor.facing * Math.sin(Math.min(1, actor.stateTime * 3.8) * Math.PI) * 1.25;
-        this.body.position.y -= 0.3;
+        this.body.rotation.x = 0.6;
+        this.body.position.y -= 0.12;
         this.leftLeg.rotation.x = -0.75;
         this.rightLeg.rotation.x = 0.5;
         this.leftArm.rotation.x = -0.9;
@@ -487,10 +495,19 @@ export class RobotView {
       this.leftArm.rotation.x = -0.35;
       this.body.rotation.y = 0.25;
     }
+    if (authoritativeWeapon && actor.attack?.move) {
+      const grip = (actor.attack.collision?.capsule ?? sampleWeapon(actor, actor.attack.move, actor.attack.elapsed * 60)).a;
+      const inverse = new Matrix4().getInverse(worldMatrix(this.body));
+      const local = new Vector3(grip.x, grip.y, grip.z).applyMatrix4(inverse);
+      const dx = local.x - this.rightArm.x, dy = local.y - this.rightArm.y, dz = local.z - this.rightArm.z;
+      this.rightArm.rotation.set(Math.atan2(-dz, -dy), 0, -Math.atan2(-dx, Math.hypot(dy, dz)));
+      this.rightArm.scale.y = Math.hypot(dx, dy, dz) / .76;
+    }
     if (mounted) { this.leftLeg.rotation.x = -0.85; this.rightLeg.rotation.x = -0.85; }
   }
 
   destroy(): void {
+    this.weaponView?.root.destroy({ children: true });
     this.root.destroy({ children: true });
     this.shadow.destroy({ children: true });
   }

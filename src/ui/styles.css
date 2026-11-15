@@ -691,3 +691,7 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
   .graphics-row select { min-width: 0; max-width: 56%; font-size: 11px; }
   .top-actions { gap: 3px; }
 }
+
+.chassis-modules { display: block; font: 9px/1.5 var(--font-mono, monospace); color: #b8d1cf; }
+.loadout-modules { display: block; margin-top: 6px; max-width: 230px; font-size: 9px; line-height: 1.5; color: #b8d1cf; }
+[data-action="hitboxes"][aria-pressed="true"] { color: #67ffbb; }

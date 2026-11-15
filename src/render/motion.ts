@@ -5,6 +5,7 @@ const smooth = (value: number) => { const t = clamp01(value); return t * t * (3 
 
 /** Pose and VFX share the simulation's windup / active / recovery boundaries. */
 export function attackMotion(attack: AttackVisual, weapon: WeaponId) {
+  weapon = attack.move?.pose ?? weapon;
   const time = attack.elapsed;
   const windup = smooth(time / Math.max(0.001, attack.activeStart));
   const swing = smooth((time - attack.activeStart) / Math.max(0.001, attack.activeEnd - attack.activeStart));
@@ -82,10 +83,10 @@ export function attackMotion(attack: AttackVisual, weapon: WeaponId) {
     pose.leftArmZ = 1.2; pose.rightArmZ = -1.2;
     pose.slashX = Math.PI / 2;
   }
-  if (attack.kind === 'dash' || attack.name === 'RAIL CHARGE') {
+  if (attack.kind === 'dash' || attack.move?.behavior === 'rush') {
     pose.bodyX = 0.7; pose.rightArmX = -1.4; pose.crouch = -0.2;
   }
-  if (attack.name.includes('SHOT') || attack.name.includes('LASER') || attack.name === 'ION PULSE') {
+  if (attack.move && ['cannon', 'projectile', 'mortar'].includes(attack.move.behavior)) {
     pose.bodyY = attack.direction === 'back' ? Math.PI : -0.2; pose.rightArmX = -1.5 + swing * 0.25; pose.rightArmY = 0;
     pose.leftArmX = -1.2; pose.trail = false;
   }

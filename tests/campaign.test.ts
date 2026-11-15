@@ -1,3 +1,4 @@
+import { runCampaignInputs } from './helpers/play';
 import { describe, expect, it } from 'vite-plus/test';
 import { GameEngine } from '../src/game/engine';
 import { createCandidates } from '../src/game/loadouts';
@@ -44,6 +45,7 @@ describe('campaign structure and supplies', () => {
         tick(game, 100);
       }
       if (sector < STAGES.length - 1) {
+        runCampaignInputs(game, 3600, () => game.world.phase === 'sector-clear');
         expect(game.world.phase).toBe('sector-clear');
         expect(game.world.completedSectors).toBe(sector + 1);
         game.nextSector();
@@ -60,6 +62,7 @@ describe('campaign structure and supplies', () => {
     for (let wave = 0; wave < STAGES[0]!.waves.length; wave++) {
       game.world.enemies.forEach((enemy) => { enemy.x = game.world.arenaMax + 6; }); tick(game, 100);
     }
+    runCampaignInputs(game, 3600, () => game.world.phase === 'sector-clear');
     game.pause();
     expect(game.claimSupply('power')).toBe(true);
     expect(game.claimSupply('stock')).toBe(false);

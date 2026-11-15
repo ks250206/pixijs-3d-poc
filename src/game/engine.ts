@@ -1,3 +1,8 @@
+import { EncounterDirector, emptyCoordination } from './director';
+import { createObjective, objectiveProps } from './objectives';
+import { playerMove, specialMove, utilityMove, totalFrames, canCancel, type MoveDefinition, type BehaviorId, type CancelAction } from './combat/moves';
+import { sweptContact, sampleWeapon, bodyHurtbox, type Vec3 } from './combat/geometry';
+import { DODGE, DEPTH_LIMIT, PLATFORM_DEPTH } from './movement';
 import { createCandidates, seededRandom } from './loadouts';
 import { createArena, insideProp } from './arena';
 import { ARENA_HALF_WIDTH, SECTOR_SPAN, STAGES, TRAINING_WAVES } from './campaign';
@@ -5,11 +10,15 @@ import { createPattern, insideHazard } from './patterns';
 import { EMPTY_INPUT, type Actor, type ActorKind, type AreaHazard, type ArenaProp, type AttackDirection, type AttackKind, type Effect, type GameMode, type InputFrame, type Loadout, type Projectile, type SupplyChoice, type WorldState } from './types';
 
 const GRAVITY = 27;
-const PLATFORM_DEPTH = 4.5;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 const approach = (value: number, target: number, amount: number) => value < target ? Math.min(value + amount, target) : Math.max(value - amount, target);
 
 interface Strike {
+  move: MoveDefinition;
+  connected: boolean;
+  previous: Vec3 & { facing: 1 | -1 };
+  id?: string;
+  behavior?: BehaviorId;
   damage: number;
   force: number;
   growth: number;
@@ -23,10 +32,12 @@ interface Strike {
   projectile: boolean;
   tip: boolean;
   fired: boolean;
+  motionStarted?: boolean;
   source: string;
 }
 
 interface ActorMemory {
+  phaseTimer: number;
   actionTimer: number;
   forced: number;
   jumps: number;
@@ -52,6 +63,8 @@ interface ActorMemory {
 }
 
 interface ProjectileMemory {
+  hit?: Set<string>;
+  pierce?: number;
   kind: AttackKind;
   damage: number;
   force: number;
@@ -68,18 +81,20 @@ export class GameEngine {
   private serial = 0;
   private comboAge = 0;
   private sectorCleared = false;
+  private director = new EncounterDirector();
   private startingLoadout: Loadout;
 
   constructor(seed = 1) {
     this.random = seededRandom(seed);
     const loadout = createCandidates(seed)[0]!;
-    this.startingLoadout = { ...loadout };
+    this.startingLoadout = structuredClone(loadout);
     const player = this.makeActor('player', -4, 0);
     this.world = {
+      objective: createObjective(0, 'campaign'), coordination: emptyCoordination(),
       phase: 'ready', mode: 'campaign', time: 0, seed: seed >>> 0,
       sector: 0, completedSectors: 0, supplyClaimed: false, supply: null, wave: 1, player,
       enemies: [this.makeActor('scout', 2, -1), this.makeActor('bruiser', 6, 0.8), this.makeActor('drone', 8, -2)],
-      projectiles: [], hazards: [], effects: [], props: createArena(0), loadout,
+      projectiles: [], hazards: [], effects: [], props: createArena(0), loadout: structuredClone(loadout),
       stocks: 3, kills: 0, combo: 0, bestCombo: 0, score: 0,
       lastMove: 'SYSTEM READY', message: 'BREAK THE DIRECTIVE', messageTime: 0,
       shake: 0, hitstop: 0, specialCooldown: 0, waveTimer: 0,
@@ -89,22 +104,25 @@ export class GameEngine {
 
   start(loadout: Loadout, mode: GameMode = 'campaign'): void {
     const seed = this.world.seed;
-    this.startingLoadout = { ...loadout };
+    this.startingLoadout = structuredClone(loadout);
     this.random = seededRandom(seed ^ 0x1f842b);
     this.memories.clear();
     this.shots.clear();
     this.serial = 0;
     this.comboAge = 0;
     this.sectorCleared = false;
+    this.director.reset();
     const player = this.makeActor('player', -5, 0);
     this.world = {
+      objective: createObjective(0, mode), coordination: emptyCoordination(),
       phase: 'playing', mode, time: 0, seed, sector: 0, completedSectors: 0, supplyClaimed: false, supply: null, wave: 1,
-      player, enemies: [], projectiles: [], hazards: [], effects: [], props: createArena(0), loadout,
+      player, enemies: [], projectiles: [], hazards: [], effects: [], props: createArena(0), loadout: structuredClone(loadout),
       stocks: 3, kills: 0, combo: 0, bestCombo: 0, score: 0,
       lastMove: 'SYSTEM ONLINE', message: mode === 'training' ? 'TRAINING // 機体を試そう' : '01 // THE FOUNDRY', messageTime: 3,
       shake: 0, hitstop: 0, specialCooldown: 0, waveTimer: 0,
       cameraX: 0, arenaMin: -ARENA_HALF_WIDTH, arenaMax: ARENA_HALF_WIDTH, events: [],
     };
+    this.world.props.push(...objectiveProps(0, this.world.objective));
     player.invulnerable = 1.8;
     this.spawnWave();
     this.effect('spawn', player.x, 0, player.z, 0.8, 2.2, loadout.color);
@@ -155,7 +173,9 @@ export class GameEngine {
     w.effects = [];
     w.projectiles = []; w.hazards = [];
     w.enemies = [];
-    w.props = createArena(w.sector);
+    w.objective = createObjective(w.sector, w.mode);
+    w.props = [...createArena(w.sector), ...objectiveProps(w.sector, w.objective)];
+    this.director.reset(); w.coordination = emptyCoordination();
     this.shots.clear();
     w.phase = 'playing';
     this.sectorCleared = false;
@@ -198,6 +218,10 @@ export class GameEngine {
       mem.dashTimer = Math.max(0, mem.dashTimer - dt);
       mem.comboTimer = Math.max(0, mem.comboTimer - dt);
       if (!actor.alive) continue;
+      if (actor.bossPhase === 'transition') {
+        mem.phaseTimer = Math.max(0, mem.phaseTimer - dt);
+        if (mem.phaseTimer === 0) { actor.bossPhase = 'overdrive'; actor.state = 'idle'; mem.actionTimer = 0; mem.cooldown = 0.3; mem.pattern = 0; w.message = 'OVERDRIVE // Pincer・Pulse・Overload'; w.messageTime = 3; }
+      }
       if (mem.actionTimer > 0) mem.actionTimer = Math.max(0, mem.actionTimer - dt);
       if (actor.state !== 'charge' && actor.state !== 'grab' && actor.state !== 'grabbed' && mem.actionTimer <= 0 && actor.state !== 'idle' && actor.state !== 'run' && actor.state !== 'jump' && actor.state !== 'fall') {
         actor.state = actor.y > 0.02 ? 'fall' : 'idle';
@@ -209,17 +233,21 @@ export class GameEngine {
       }
     }
 
+    if (w.mode !== 'training') this.director.update(w, dt);
     this.updatePlayer(dt, input);
     if (w.phase !== 'sector-clear') for (const enemy of w.enemies) this.updateEnemy(enemy, dt);
-    for (const actor of [w.player, ...w.enemies]) if (actor.alive) this.updateAttack(actor, dt);
-    this.updateProjectiles(dt);
-    this.updateHazards(dt);
+    // Prepare action velocities/timing, resolve all movement, then test the pose rendered this tick.
+    for (const actor of [w.player, ...w.enemies]) if (actor.alive) this.prepareAttack(actor, dt);
     for (const actor of [w.player, ...w.enemies]) if (actor.alive) this.integrate(actor, dt, actor.kind === 'player' ? input : EMPTY_INPUT);
     this.updateArena(dt);
     this.updateGrabPositions(dt);
+    for (const actor of [w.player, ...w.enemies]) if (actor.alive) this.constrainDepth(actor);
+    for (const actor of [w.player, ...w.enemies]) if (actor.alive) this.updateAttack(actor, dt);
+    this.updateProjectiles(dt);
+    this.updateHazards(dt);
 
     for (const actor of [w.player, ...w.enemies]) {
-      if (actor.alive && (actor.x < w.arenaMin - 5 || actor.x > w.arenaMax + 5 || Math.abs(actor.z) > 7 || actor.y > 18 || actor.y < -7)) this.ringOut(actor);
+      if (actor.alive && (actor.x < w.arenaMin - 5 || actor.x > w.arenaMax + 5 || actor.y > 18 || actor.y < -7)) this.ringOut(actor);
     }
     w.enemies = w.enemies.filter((enemy) => {
       if (!enemy.alive && enemy.stateTime > 1) { this.memories.delete(enemy.id); return false; }
@@ -231,6 +259,7 @@ export class GameEngine {
       mem.respawnTimer -= dt;
       if (mem.respawnTimer <= 0) this.respawn();
     }
+    this.updateObjective(dt);
     if (w.phase === 'sector-clear') {
       if (w.player.x > w.arenaMax - 2) this.nextSector();
     } else if (w.phase === 'playing' && !w.enemies.some((enemy) => enemy.alive)) {
@@ -247,6 +276,7 @@ export class GameEngine {
       vx: 0, vy: 0, vz: 0, facing: kind === 'player' ? 1 : -1,
       damage: 0, armor: kind === 'boss' ? 135 : kind === 'warden' ? 70 : 0, mount: kind === 'rider' ? 30 : 0, leaderId: null, guard: kind === 'sentinel' ? 40 : 0, alive: true,
       state: 'idle', stateTime: 0, invulnerable: 0, scale: kind === 'boss' ? 2.65 : kind === 'warden' ? 1.85 : kind === 'bruiser' ? 1.25 : kind === 'minion' ? 0.58 : kind === 'drone' ? 0.8 : 1,
+      bossPhase: kind === 'boss' ? 'armored' : null, phaseChanges: 0, tactic: '',
       attack: null, telegraph: 0, aim: null,
     };
     this.resetMemory(actor);
@@ -255,7 +285,7 @@ export class GameEngine {
 
   private resetMemory(actor: Actor): void {
     this.memories.set(actor.id, {
-      actionTimer: 0, forced: 0, jumps: 0, airDodgeUsed: false, airDodgeDown: false, recoveryUsed: false, lastJumpHeld: false,
+      phaseTimer: 0, actionTimer: 0, forced: 0, jumps: 0, airDodgeUsed: false, airDodgeDown: false, recoveryUsed: false, lastJumpHeld: false,
       charge: 0, chargeDirection: 'forward', strike: null,
       comboStage: 0, comboTimer: 0, dashTimer: 0,
       cooldown: 0.7 + this.random() * 1.5, pattern: 0, grabTarget: null, grabbedBy: null,
@@ -275,7 +305,20 @@ export class GameEngine {
     if (!p.alive) return;
     const m = this.memory(p);
     const ground = this.isGrounded(p);
-    const free = m.actionTimer <= 0 || (p.state === 'wavedash' && p.stateTime > 0.09);
+    let free = m.actionTimer <= 0 || (p.state === 'wavedash' && p.stateTime > 0.09);
+    if (!free && p.state === 'attack' && p.attack?.move && m.strike) {
+      const requests: CancelAction[] = [];
+      if (input.dodge && (ground || !m.airDodgeUsed)) requests.push('dodge');
+      if (input.jump && (ground || m.jumps < 2)) requests.push('jump');
+      if (input.special && w.specialCooldown <= 0 && !(this.direction(input, p.facing) === 'up' && p.y > .05 && m.recoveryUsed)) requests.push('special');
+      if (input.attack) requests.push('attack');
+      const selected = requests.find(action => canCancel(p.attack!.move!, p.attack!.elapsed * 60, m.strike!.connected, action));
+      if (selected) {
+        // Execute exactly the approved action; simultaneous unlisted inputs cannot steal it.
+        input = { ...input, dodge: selected === 'dodge', jump: selected === 'jump', special: selected === 'special', attack: selected === 'attack', smash: false, grab: false, dash: false };
+        free = true; m.actionTimer = 0; m.strike = null; p.attack = null; p.state = ground ? 'idle' : 'fall';
+      }
+    }
     if (p.state === 'grabbed') return;
     if (p.state === 'hurt') {
       // Directional influence: a modest adjustment during hitstun, not an escape.
@@ -307,21 +350,21 @@ export class GameEngine {
       if (ground) {
         const magnitude = Math.hypot(input.moveX, input.moveZ);
         p.state = 'dodge'; p.stateTime = 0;
-        m.actionTimer = 0.36;
-        p.invulnerable = 0.25;
-        p.vx = magnitude > 0.3 ? input.moveX / magnitude * 12 : 0;
-        p.vz = magnitude > 0.3 ? input.moveZ / magnitude * 8 : 0;
-        w.lastMove = magnitude > 0.3 ? 'ROLL DODGE' : 'SPOT DODGE';
+        m.actionTimer = DODGE.groundDuration;
+        p.invulnerable = DODGE.groundInvulnerability;
+        p.vx = magnitude > 0.3 ? input.moveX / magnitude * DODGE.groundX : p.facing * DODGE.groundX;
+        p.vz = magnitude > 0.3 ? input.moveZ / magnitude * DODGE.groundZ : 0;
+        w.lastMove = 'GROUND DASH';
         w.events.push({ type: 'dodge' });
       } else if (!m.airDodgeUsed) {
         const magnitude = Math.hypot(input.moveX, input.moveZ);
         p.state = 'airdodge'; p.stateTime = 0;
-        m.actionTimer = 0.32;
+        m.actionTimer = DODGE.airDuration;
         m.airDodgeUsed = true;
         m.airDodgeDown = input.moveZ > 0.3;
-        p.invulnerable = 0.23;
-        p.vx = magnitude > 0.3 ? input.moveX / magnitude * 18 : 0;
-        p.vy = magnitude > 0.3 ? -input.moveZ / magnitude * 18 : 0;
+        p.invulnerable = DODGE.airInvulnerability;
+        p.vx = magnitude > 0.3 ? input.moveX / magnitude * DODGE.air : 0;
+        p.vy = magnitude > 0.3 ? -input.moveZ / magnitude * DODGE.air : 0;
         p.vz = 0;
         w.lastMove = 'AIR DODGE';
         w.events.push({ type: 'dodge' });
@@ -396,44 +439,14 @@ export class GameEngine {
     const w = this.world;
     const p = w.player;
     const m = this.memory(p);
-    let damage = 10, force = 4.6, growth = 0.1, range = 2.25, angle = 0.5, duration = 0.42, windup = 0.1;
     if (kind === 'jab') {
       m.comboStage = m.comboTimer > 0 ? (m.comboStage + 1) % 3 : 0;
       m.comboTimer = 0.85;
-      damage = 5 + m.comboStage * 2;
-      force = m.comboStage === 2 ? 7 : 2.5;
-      growth = m.comboStage === 2 ? 0.09 : 0.035;
-      range = 1.95; duration = 0.22; windup = 0.055;
     }
-    if (kind === 'tilt') { damage = 11; force = 5; duration = 0.39; }
-    if (kind === 'dash') { damage = 12; force = 7; range = 2.55; p.vx = p.facing * 9; duration = 0.49; }
-    if (kind === 'smash') { damage = 18 * (1 + charge * 0.8); force = 10 * (1 + charge * 0.55); growth = 0.155; range = 2.9; duration = 0.64; windup = 0.13; }
-    if (kind === 'aerial') { damage = direction === 'back' ? 14 : 11; force = direction === 'back' ? 7 : 5; range = 2.25; duration = 0.4; }
-    if (direction === 'up') { angle = 1.28; range *= 0.85; }
-    if (direction === 'down') { angle = kind === 'aerial' ? -1.15 : 0.28; }
-    if (w.loadout.weapon === 'arc') range *= 1.18;
-    if (w.loadout.weapon === 'pile') { duration *= 1.13; windup *= 1.3; force *= 1.1; }
-    if (w.loadout.weapon === 'razor') { duration *= 0.78; windup *= 0.7; }
-    const weapon = w.loadout.weapon;
-    let depth = direction === 'down' && kind === 'smash' ? 2.2 : 1.35;
-    let radial = (kind === 'aerial' && direction === 'neutral') || (kind === 'smash' && direction === 'down');
-    const cannonShot = weapon === 'cannon' && direction !== 'up' && direction !== 'down' && kind !== 'dash';
-    if (weapon === 'lance') {
-      range *= 2; depth = 0.55; duration *= 1.3; windup *= 1.5; radial = false;
-    } else if (weapon === 'scythe') {
-      range *= 1.45; depth = 2.5; radial = true; force *= 0.72; duration *= 1.35; windup *= 1.7;
-    } else if (weapon === 'cannon') {
-      duration = kind === 'smash' ? 1.05 : 0.66; windup = kind === 'smash' ? 0.27 : 0.18;
-      if (cannonShot) { range = kind === 'smash' ? 12 : 9; radial = false; damage *= 1.3; }
-    }
-    const baseName = kind === 'jab' ? `JAB ${m.comboStage + 1}` : `${direction.toUpperCase()} ${kind === 'aerial' ? 'AIR' : kind.toUpperCase()}`;
-    const name = weapon === 'lance' ? `LANCE / ${baseName}` : weapon === 'scythe' ? `ORBIT / ${baseName}` : weapon === 'cannon' ? `${cannonShot ? 'CANNON SHOT' : 'CANNON BASH'} / ${baseName}` : baseName;
-    this.beginAttack(p, kind, direction, name, duration, range, charge, {
-      damage: damage * w.loadout.power, force: force * w.loadout.power, growth: growth * w.loadout.power, angle,
-      activeStart: windup, activeEnd: Math.min(duration - 0.04, windup + (kind === 'smash' ? 0.17 : 0.13)), depth,
-      height: direction === 'up' ? 3.5 : 1.85, radial, projectile: cannonShot, tip: weapon === 'lance',
-    });
-    w.lastMove = name;
+    const move = playerMove(w.loadout, kind, direction, m.comboStage, charge);
+    if (kind === 'dash') p.vx = p.facing * 9;
+    this.beginMove(p, move);
+    w.lastMove = move.name;
     if (kind === 'smash') w.events.push({ type: 'smash', intensity: charge });
   }
 
@@ -442,34 +455,47 @@ export class GameEngine {
     this.playerAttack('smash', m.chargeDirection, m.charge);
   }
 
-  private beginAttack(actor: Actor, kind: AttackKind, direction: AttackDirection, name: string, duration: number, range: number, charge: number, options: Partial<Strike>): void {
+  private beginMove(actor: Actor, move: MoveDefinition): void {
     const m = this.memory(actor);
     actor.state = 'attack'; actor.stateTime = 0;
-    m.actionTimer = duration;
+    m.actionTimer = totalFrames(move) / 60;
     m.strike = {
-      damage: 8, force: 6, growth: 0.065, angle: 0.55, depth: 1.2, height: 1.9,
-      activeStart: 0.2, activeEnd: 0.35, hit: new Set(), radial: false, projectile: false, tip: false, fired: false,
-      source: actor.id, ...options,
+      move, connected: false, previous: { x: actor.x, y: actor.y, z: actor.z, facing: actor.facing },
+      damage: move.damage, force: move.force, growth: move.growth, angle: move.angle,
+      activeStart: move.frames.startup / 60, activeEnd: (move.frames.startup + move.frames.active) / 60,
+      depth: move.shape.depth, height: move.shape.height, hit: new Set(),
+      radial: move.shape.trajectory === 'orbit' || move.shape.trajectory === 'burst',
+      projectile: ['projectile', 'cannon', 'mortar'].includes(move.behavior), tip: move.shape.tip, fired: false, source: actor.id,
     };
-    actor.attack = { name, kind, direction, elapsed: 0, duration, range, charge,
-      activeStart: m.strike.activeStart, activeEnd: m.strike.activeEnd, combo: m.comboStage };
+    actor.attack = { move, name: move.name, kind: move.kind, direction: move.direction, elapsed: 0,
+      duration: m.actionTimer, range: move.shape.reach, charge: move.charge,
+      activeStart: m.strike.activeStart, activeEnd: m.strike.activeEnd, combo: move.combo };
     actor.aim = actor.kind === 'player' ? null : { x: this.world.player.x, y: this.world.player.y, z: this.world.player.z };
   }
 
-  private updateAttack(actor: Actor, dt: number): void {
+  private beginAttack(actor: Actor, kind: AttackKind, direction: AttackDirection, name: string, duration: number, range: number, charge: number, options: Partial<Strike>): void {
+    this.beginMove(actor, utilityMove(options.id ?? 'enemy.strike', name, kind, direction, duration, range, {
+      behavior: options.behavior ?? (options.projectile ? 'projectile' : 'melee'),
+      pose: actor.kind === 'player' ? this.world.loadout.weapon : ['boss', 'warden', 'bruiser'].includes(actor.kind) ? 'pile' : 'arc',
+      startup: (options.activeStart ?? 0.2) * 60, end: (options.activeEnd ?? 0.35) * 60,
+      radial: options.radial, depth: options.depth, height: options.height, charge,
+      damage: options.damage ?? 8, force: options.force ?? 6, growth: options.growth ?? 0.065, angle: options.angle ?? 0.55,
+    }));
+  }
+
+  private prepareAttack(actor: Actor, dt: number): void {
     const attack = actor.attack;
     const strike = this.memory(actor).strike;
     if (attack && !strike && actor.state === 'attack') attack.elapsed += dt;
     if (!attack || !strike || actor.state !== 'attack') return;
+    strike.previous = { x: actor.x, y: actor.y, z: actor.z, facing: actor.facing };
     attack.elapsed += dt;
     actor.telegraph = attack.elapsed < strike.activeStart ? 1 - attack.elapsed / strike.activeStart : 0;
-    // Area casts resolve through their visible floor footprints, not a melee box.
-    if (attack.name.startsWith('GRID /')) return;
-    if (attack.name === 'LEAP STRIKE' && attack.elapsed > strike.activeEnd) {
+    if (strike.move.behavior === 'leap' && attack.elapsed > strike.activeEnd) {
       actor.vx = approach(actor.vx, 0, dt * 24);
       actor.vz = approach(actor.vz, 0, dt * 24);
     }
-    if (attack.name === 'RAIL CHARGE' || attack.name === 'SHOCK DIVE' || attack.name === 'RIDER PASS') {
+    if (strike.move.behavior === 'rush') {
       if (attack.elapsed >= strike.activeStart && attack.elapsed <= strike.activeEnd) {
         actor.vx = actor.facing * (actor.kind === 'rider' ? 14 : actor.kind === 'charger' ? 13 : 9);
         actor.vz = 0;
@@ -477,6 +503,23 @@ export class GameEngine {
         this.memory(actor).forced = 0.08;
       } else { actor.vx = 0; actor.vz = 0; }
     }
+    if (!strike.motionStarted && attack.elapsed >= strike.activeStart && strike.move.behavior === 'leap' && actor.aim) {
+      strike.motionStarted = true;
+      actor.vy = 10;
+      actor.vx = clamp((actor.aim.x - actor.x) / .75, -7, 7);
+      actor.vz = clamp((actor.aim.z - actor.z) / .75, -4, 4);
+      this.memory(actor).forced = .85;
+    }
+  }
+
+  private updateAttack(actor: Actor, dt: number): void {
+    const attack = actor.attack, strike = this.memory(actor).strike;
+    if (!attack || !strike || actor.state !== 'attack') return;
+    const previous = strike.previous;
+    const frame = attack.elapsed * 60;
+    const checkedPose = sampleWeapon(actor, strike.move, frame);
+    attack.collision = { capsule: checkedPose, frame, active: !['none','area','projectile','cannon','mortar'].includes(strike.move.behavior) && strike.move.frames.active > 0 && frame >= strike.move.frames.startup && frame <= strike.move.frames.startup + strike.move.frames.active };
+    if (strike.move.behavior === 'area') return;
     if (attack.elapsed < strike.activeStart || attack.elapsed - dt > strike.activeEnd) return;
     if (strike.projectile && !strike.fired) {
       strike.fired = true;
@@ -486,52 +529,33 @@ export class GameEngine {
     if (strike.projectile) return;
     if (!strike.fired) {
       strike.fired = true;
-      if (attack.name === 'LEAP STRIKE' && actor.aim) {
-        actor.vy = 10;
-        actor.vx = clamp((actor.aim.x - actor.x) / 0.75, -7, 7);
-        actor.vz = clamp((actor.aim.z - actor.z) / 0.75, -4, 4);
-        this.memory(actor).forced = 0.85;
-      }
       const color = actor.kind === 'player' ? this.world.loadout.color : 0xff6b67;
       this.effect(attack.direction === 'down' || strike.radial ? 'shockwave' : 'trail', actor.x + actor.facing * attack.range * 0.4, actor.y + 0.9, actor.z, 0.25, attack.range, color);
-      if (actor.kind === 'boss' && attack.name.includes('SLAM')) {
+      if (actor.kind === 'boss' && strike.move.id === 'boss.slam') {
         this.effect('shockwave', actor.x, 0.08, actor.z, 0.7, 5, 0xff624e);
         this.world.shake = Math.max(this.world.shake, 0.35);
       }
     }
-    // A swing touches each piece of machinery only once, just like a fighter.
+    const from = (attack.elapsed - dt) * 60, to = attack.elapsed * 60;
     for (const prop of this.world.props) {
       if (!prop.alive || prop.hp <= 0 || strike.hit.has(prop.id)) continue;
-      const dx = prop.x - actor.x;
-      const facing = attack.direction === 'back' ? -actor.facing : actor.facing;
-      const xHits = strike.radial || attack.direction === 'up' ? Math.abs(dx) < attack.range + prop.width / 2 : dx * facing > -prop.width / 2 && dx * facing < attack.range + prop.width / 2;
-      if (xHits && Math.abs(prop.z - actor.z) < strike.depth + prop.depth / 2 && actor.y < prop.height && actor.y + strike.height > 0) {
-        strike.hit.add(prop.id);
-        this.damageProp(prop, strike.damage);
+      const box = { min: { x: prop.x - prop.width / 2, y: 0, z: prop.z - prop.depth / 2 }, max: { x: prop.x + prop.width / 2, y: prop.height, z: prop.z + prop.depth / 2 } };
+      if (sweptContact(actor, strike.move, from, to, box, previous, checkedPose) !== null) {
+        strike.hit.add(prop.id); this.damageProp(prop, strike.damage, actor);
       }
     }
     const targets = actor.kind === 'player' ? this.world.enemies : [this.world.player];
     for (const target of targets) {
       if (!target.alive || target.invulnerable > 0 || strike.hit.has(target.id) || target.state === 'grabbed') continue;
-      const dx = target.x - actor.x;
-      const dz = target.z - actor.z;
-      const dy = target.y - actor.y;
-      const facing = attack.direction === 'back' ? -actor.facing : actor.facing;
-      const reach = attack.range + target.scale * 0.3;
-      const xHits = strike.radial || attack.direction === 'up' ? Math.abs(dx) < reach : dx * facing > -0.6 && dx * facing < reach;
-      // Check the target's body interval too: a jumping fighter can strike the
-      // upper body of a tall boss even when their feet are several units apart.
-      const heightHits = attack.direction === 'up'
-        ? dy > -target.scale * 1.7 && dy < strike.height
-        : dy < strike.height && dy + target.scale * 1.7 > -0.15;
-      if (xHits && Math.abs(dz) < strike.depth + target.scale * 0.3 && heightHits) {
-        strike.hit.add(target.id);
-        const hitFacing = strike.radial ? (dx >= 0 ? 1 : -1) : facing;
-        const tip = strike.tip && Math.abs(dx) >= attack.range * 0.7 ? 1.35 : 1;
-        this.hit(target, actor, strike.damage * tip, strike.force * tip, strike.growth, strike.angle, hitFacing as 1 | -1, attack.kind);
-        if (tip > 1) this.effect('text', target.x, target.y + 2.3, target.z, 0.5, 1, 0x79cfff, 'TIP HIT');
+      const multiplier = sweptContact(actor, strike.move, from, to, bodyHurtbox(target), previous, checkedPose);
+      if (multiplier !== null) {
+        strike.hit.add(target.id); strike.connected = true;
+        const facing = strike.radial ? (target.x >= actor.x ? 1 : -1) : attack.direction === 'back' ? -actor.facing : actor.facing;
+        this.hit(target, actor, strike.damage * multiplier, strike.force * multiplier, strike.growth, strike.angle, facing as 1 | -1, attack.kind);
+        if (multiplier > 1) this.effect('text', target.x, target.y + 2.3, target.z, 0.5, 1, 0x79cfff, 'TIP HIT');
       }
     }
+    strike.previous = { x: actor.x, y: actor.y, z: actor.z, facing: actor.facing };
   }
 
   private special(input: InputFrame): void {
@@ -539,41 +563,25 @@ export class GameEngine {
     const direction = this.direction(input, p.facing);
     if (direction === 'up' && p.y > 0.05 && m.recoveryUsed) return;
     if (Math.abs(input.moveX) > 0.3) p.facing = input.moveX > 0 ? 1 : -1;
+    const move = specialMove(w.loadout, direction);
     w.specialCooldown = (w.loadout.special === 'vortex' ? 2.6 : 1.45) * (w.loadout.trait === 'overclocked' ? 0.65 : 1);
     if (direction === 'up') {
-      m.recoveryUsed = true;
-      p.vy = 14.5; p.vx = input.moveX * 5;
-      m.jumps = Math.max(m.jumps, 1);
-      this.beginAttack(p, 'special', 'up', 'RISING CIRCUIT', 0.58, 2.3, 0, { damage: 14 * w.loadout.power, force: 7, growth: 0.11, angle: 1.3, activeStart: 0.04, activeEnd: 0.4, height: 3, depth: 1.5, radial: true });
-      w.lastMove = 'UP SPECIAL // RISING CIRCUIT';
-    } else if (direction === 'down') {
-      this.beginAttack(p, 'special', 'down', 'EMP BURST', 0.62, 3.4, 0, { damage: 14 * w.loadout.power, force: 8, growth: 0.11, angle: 0.65, activeStart: 0.18, activeEnd: 0.38, depth: 3.4, height: 2.8, radial: true });
-      p.vy = p.y > 0.2 ? -14 : p.vy;
-      w.lastMove = 'DOWN SPECIAL // EMP BURST';
-    } else if (w.loadout.special === 'pulse') {
-      this.beginAttack(p, 'special', direction, 'ION PULSE', 0.45, 2, 0, { damage: 15 * w.loadout.power, force: 7, growth: 0.09, projectile: true, activeStart: 0.14, activeEnd: 0.2 });
-      w.lastMove = 'SPECIAL // ION PULSE';
-    } else if (w.loadout.special === 'blink') {
-      p.vx = p.facing * 21;
-      p.invulnerable = 0.22;
-      m.forced = 0.28;
-      this.beginAttack(p, 'special', 'forward', 'PHASE SHIFT', 0.36, 2.2, 0, { damage: 17 * w.loadout.power, force: 9, growth: 0.1, activeStart: 0.025, activeEnd: 0.3, depth: 1.6 });
-      w.lastMove = 'SPECIAL // PHASE SHIFT';
+      m.recoveryUsed = true; p.vy = 14.5; p.vx = input.moveX * 5; m.jumps = Math.max(m.jumps, 1);
+    } else if (direction === 'down') p.vy = p.y > 0.2 ? -14 : p.vy;
+    else if (move.behavior === 'phase') {
+      const cross = direction === 'neutral' ? w.loadout.modules.neutral === 'focused' : w.loadout.modules.side === 'cross';
+      p.vx = p.facing * (cross ? 21 : 12); p.invulnerable = cross ? 0.22 : 0.12; m.forced = 0.28;
       this.effect('trail', p.x, p.y + 0.9, p.z, 0.55, 3, w.loadout.color);
-    } else {
-      for (const enemy of w.enemies) {
-        const distance = Math.hypot(enemy.x - p.x, enemy.z - p.z);
-        if (enemy.alive && distance < 6 && enemy.armor <= 0) {
-          enemy.vx = (p.x - enemy.x) * 3.2;
-          enemy.vz = (p.z - enemy.z) * 3.2;
-          enemy.state = 'hurt'; enemy.stateTime = 0;
-          this.memory(enemy).actionTimer = 0.23;
-        }
+    } else if (w.loadout.special === 'vortex') {
+      const radius = w.loadout.modules.neutral === 'split' ? 8 : 6;
+      for (const enemy of w.enemies) if (enemy.alive && enemy.invulnerable <= 0 && enemy.bossPhase !== 'transition' && Math.hypot(enemy.x - p.x, enemy.z - p.z) < radius && enemy.armor <= 0) {
+        enemy.vx = (p.x - enemy.x) * 3.2; enemy.vz = (p.z - enemy.z) * 3.2;
+        enemy.state = 'hurt'; enemy.stateTime = 0; enemy.attack = null;
+        this.memory(enemy).strike = null; this.memory(enemy).actionTimer = 0.23;
       }
-      this.beginAttack(p, 'special', 'neutral', 'GRAVITY WELL', 0.8, 4, 0, { damage: 19 * w.loadout.power, force: 11, growth: 0.12, angle: 0.85, radial: true, activeStart: 0.35, activeEnd: 0.55, depth: 4, height: 3 });
-      w.lastMove = 'SPECIAL // GRAVITY WELL';
-      this.effect('shockwave', p.x, p.y + 0.2, p.z, 0.8, 4.5, 0xa18bff);
+      this.effect('shockwave', p.x, p.y + 0.2, p.z, .8, move.shape.reach, 0xa18bff);
     }
+    this.beginMove(p, move); w.lastMove = `SPECIAL // ${move.name}`;
     w.events.push({ type: 'special' });
   }
 
@@ -582,7 +590,7 @@ export class GameEngine {
     const target = w.enemies.filter((enemy) => enemy.alive && enemy.invulnerable <= 0 && enemy.armor <= 0 && Math.abs(enemy.z - p.z) < 1.3 && Math.abs(enemy.y - p.y) < 1.6 && (enemy.x - p.x) * p.facing > -0.4 && (enemy.x - p.x) * p.facing < 2.15).sort((a, b) => Math.abs(a.x - p.x) - Math.abs(b.x - p.x))[0];
     p.vx = 0; p.vz = 0;
     if (!target) {
-      this.beginAttack(p, 'throw', 'forward', 'GRAB / MISS', 0.36, 1.7, 0, { activeStart: 99 });
+      this.beginAttack(p, 'throw', 'forward', 'GRAB / MISS', 0.36, 1.7, 0, { id: 'utility.grab-miss', behavior: 'none', activeStart: 0, activeEnd: 0 });
       w.lastMove = 'GRAB / MISS';
       return;
     }
@@ -602,7 +610,7 @@ export class GameEngine {
     const angle = direction === 'up' ? 1.35 : direction === 'down' ? -0.8 : 0.45;
     this.hit(target, source, 13 * this.world.loadout.power, direction === 'up' ? 11 : 10, 0.13, angle, facing as 1 | -1, 'throw');
     source.state = 'attack'; source.stateTime = 0;
-    source.attack = { name: `${direction.toUpperCase()} THROW`, kind: 'throw', direction, elapsed: 0, duration: 0.32, range: 2, charge: 0, activeStart: 0, activeEnd: 0.16, combo: 0 };
+    source.attack = { move: utilityMove(`throw.${direction}`, `${direction.toUpperCase()} THROW`, 'throw', direction, .32, 2, { behavior: 'none', startup: 0, end: 0 }), name: `${direction.toUpperCase()} THROW`, kind: 'throw', direction, elapsed: 0, duration: 0.32, range: 2, charge: 0, activeStart: 0, activeEnd: 0.16, combo: 0 };
     this.memory(source).actionTimer = 0.32;
     this.world.lastMove = `${direction.toUpperCase()} THROW`;
     this.world.events.push({ type: 'throw' });
@@ -636,7 +644,7 @@ export class GameEngine {
       enemy.vz = approach(enemy.vz, clamp(-enemy.z * 3, -6, 6), dt * 12);
       return;
     }
-    if (enemy.state === 'grabbed' || enemy.state === 'hurt') return;
+    if (enemy.state === 'grabbed' || enemy.state === 'hurt' || enemy.bossPhase === 'transition') return;
     if (w.mode !== 'training' && !this.onPlatform(enemy) && !m.recoveryUsed && m.forced <= 0 && enemy.y > -3.5 && enemy.y < 5
       && enemy.x > w.arenaMin - 5 && enemy.x < w.arenaMax + 5 && Math.abs(enemy.z) < 7) {
       m.recoveryUsed = true; m.actionTimer = 0.75; m.forced = 0.75;
@@ -670,11 +678,13 @@ export class GameEngine {
     const rush = enemy.kind === 'charger' || enemy.kind === 'drone' || mounted;
     const reach = boss ? 3.4 : enemy.kind === 'sniper' ? 12 : enemy.kind === 'sapper' ? 5 : enemy.kind === 'artillery' ? 10 : enemy.kind === 'captain' ? 4.5 : ranged ? 6.8 : rush ? 5.5 : enemy.kind === 'leaper' ? 4.8 : 2;
     const speed = mounted ? 4.4 : enemy.kind === 'minion' ? 4.1 : enemy.kind === 'artillery' ? 1.6 : enemy.kind === 'bruiser' ? 2 : boss ? 1.65 : enemy.kind === 'sentinel' ? 2.2 : enemy.kind === 'scout' ? 3.8 : 3.1;
+    const plan = this.director.plan(enemy, w);
+    enemy.tactic = plan.action;
     const slot = w.enemies.indexOf(enemy);
     // Scouts approach different flanks; support units maintain firing distance.
     const flank = enemy.kind === 'scout' && Math.abs(dx) > 3 ? (slot % 2 ? 1 : -1) * 1.4 : 0;
     let targetVX = Math.abs(dx) > reach ? Math.sign(dx) * speed : 0;
-    let targetVZ = Math.abs(dz + flank) > 0.45 ? Math.sign(dz + flank) * speed * 0.75 : 0;
+    let targetVZ = Math.abs(plan.lane - enemy.z + flank) > 0.45 ? Math.sign(plan.lane - enemy.z + flank) * speed * 0.75 : 0;
     if (ranged && Math.abs(dx) < 3.6) targetVX = -Math.sign(dx) * 2.8;
     // Brief disengagement makes a scout's strike/recovery rhythm readable.
     if (enemy.kind === 'scout' && m.pattern > 0 && m.cooldown > 1.3 && Math.abs(dx) < 2.8) targetVX = -Math.sign(dx) * 2;
@@ -708,45 +718,50 @@ export class GameEngine {
     enemy.vx = approach(enemy.vx, targetVX, dt * 14);
     enemy.vz = approach(enemy.vz, clamp(targetVZ, -speed, speed), dt * 12);
     enemy.state = Math.hypot(enemy.vx, enemy.vz) > 0.3 ? 'run' : 'idle';
-    // At most two simultaneous attacks, leaving openings in a crowded wave.
-    const attackers = w.enemies.filter((other) => other.alive && other !== enemy && other.state === 'attack').length;
+    // The shared director reserves the whole telegraph, action, projectile and recovery window.
     const canReach = boss || (Math.abs(dx) <= reach + 0.3 && Math.abs(dz) < (['artillery', 'sniper', 'sapper'].includes(enemy.kind) ? 7 : ranged ? 1.8 : 1.15));
-    if (!canReach || m.cooldown > 0 || (!boss && attackers >= 2)) return;
+    if (!canReach || m.cooldown > 0 || !this.director.reserve(enemy, w, 7)) return;
+    enemy.tactic = 'COMMITTED';
     enemy.vx = 0; enemy.vz = 0;
     m.pattern++;
     m.cooldown = boss ? (enemy.armor > 0 ? 2.3 : 1.8) : enemy.kind === 'charger' ? 3.1 : 1.8 + this.random() * 0.9;
-    if (boss) {
+    if (enemy.kind === 'boss' && enemy.bossPhase === 'overdrive') {
+      const pattern = (m.pattern - 1) % 3;
+      if (pattern === 1) this.beginAttack(enemy, 'enemy', 'forward', 'OVERDRIVE / PULSE FAN', 1.15, 11, 0, { id: 'overdrive.pulse', behavior: 'projectile', damage: 18, force: 10, activeStart: .58, activeEnd: .75 });
+      else this.castArea(enemy, pattern === 0 ? 'pincer' : 'overload');
+      m.cooldown = Math.max(m.cooldown, 2);
+    } else if (boss) {
       const pattern = (m.pattern - 1) % 4;
       if (pattern !== 1) this.castArea(enemy, pattern === 0 ? 'lanes' : pattern === 2 ? 'cross' : 'sweep');
       else {
         const windup = enemy.armor > 0 ? 1 : 0.85;
-        if (Math.abs(dx) > 5) this.beginAttack(enemy, 'enemy', 'forward', 'MAINFRAME / LASER', 1.2, 9, 0, { damage: 16, force: 9, growth: 0.07, projectile: true, activeStart: 0.72 * windup, activeEnd: 0.8 });
-        else if (Math.floor(m.pattern / 4) % 2 === 0) this.beginAttack(enemy, 'enemy', 'down', 'MAINFRAME / SLAM', 1.25, 4.6, 0, { damage: 21, force: 10, growth: 0.075, radial: true, depth: 3.5, height: 1.4, activeStart: 0.75 * windup, activeEnd: 0.96, angle: 0.85 });
-        else this.beginAttack(enemy, 'enemy', 'forward', 'MAINFRAME / SWEEP', 1.1, 5.1, 0, { damage: 18, force: 11, growth: 0.07, depth: 2.9, height: 4, activeStart: 0.62 * windup, activeEnd: 0.86 });
+        if (Math.abs(dx) > 5) this.beginAttack(enemy, 'enemy', 'forward', 'MAINFRAME / LASER', 1.2, 9, 0, { id: 'boss.laser', damage: 16, force: 9, growth: 0.07, projectile: true, activeStart: 0.72 * windup, activeEnd: 0.8 });
+        else if (Math.floor(m.pattern / 4) % 2 === 0) this.beginAttack(enemy, 'enemy', 'down', 'MAINFRAME / SLAM', 1.25, 4.6, 0, { id: 'boss.slam', behavior: 'melee', damage: 21, force: 10, growth: 0.075, radial: true, depth: 3.5, height: 1.4, activeStart: 0.75 * windup, activeEnd: 0.96, angle: 0.85 });
+        else this.beginAttack(enemy, 'enemy', 'forward', 'MAINFRAME / SWEEP', 1.1, 5.1, 0, { id: 'boss.sweep', damage: 18, force: 11, growth: 0.07, depth: 2.9, height: 4, activeStart: 0.62 * windup, activeEnd: 0.86 });
       }
     } else if (enemy.kind === 'sniper' || enemy.kind === 'sapper') {
       this.castArea(enemy, enemy.kind === 'sniper' ? 'snipe' : 'mine');
     } else if (enemy.kind === 'artillery') {
       m.cooldown = 3.8;
-      this.beginAttack(enemy, 'enemy', 'up', 'MORTAR SALVO', 1.55, 12, 0, { projectile: true, activeStart: 0.7, activeEnd: 0.8, damage: 12, force: 7 });
+      this.beginAttack(enemy, 'enemy', 'up', 'MORTAR SALVO', 1.55, 12, 0, { id: 'enemy.mortar', behavior: 'mortar', projectile: true, activeStart: 0.7, activeEnd: 0.8, damage: 12, force: 7 });
     } else if (enemy.kind === 'leaper') {
       m.cooldown = 2.8;
-      this.beginAttack(enemy, 'enemy', 'down', 'LEAP STRIKE', 1.75, 1.8, 0, { damage: 10, force: 6, activeStart: 0.45, activeEnd: 1.28, depth: 1.1 });
+      this.beginAttack(enemy, 'enemy', 'down', 'LEAP STRIKE', 1.75, 1.8, 0, { id: 'enemy.leap', behavior: 'leap', damage: 10, force: 6, activeStart: 0.45, activeEnd: 1.28, depth: 1.1 });
     } else if (mounted) {
       m.cooldown = 3.4;
-      this.beginAttack(enemy, 'enemy', 'forward', 'RIDER PASS', 1.65, 2.4, 0, { damage: 14, force: 8, activeStart: 0.7, activeEnd: 1.15, depth: 0.9 });
+      this.beginAttack(enemy, 'enemy', 'forward', 'RIDER PASS', 1.65, 2.4, 0, { id: 'enemy.rider', behavior: 'rush', damage: 14, force: 8, activeStart: 0.7, activeEnd: 1.15, depth: 0.9 });
     } else if (ranged) {
-      this.beginAttack(enemy, 'enemy', 'forward', 'PULSE SHOT', 1.05, 7, 0, { projectile: true, activeStart: 0.62, activeEnd: 0.7, damage: 8, force: 5.5 });
+      this.beginAttack(enemy, 'enemy', 'forward', 'PULSE SHOT', 1.05, 7, 0, { id: 'enemy.shot', projectile: true, activeStart: 0.62, activeEnd: 0.7, damage: 8, force: 5.5 });
     } else if (enemy.kind === 'charger') {
-      this.beginAttack(enemy, 'enemy', 'forward', 'RAIL CHARGE', 1.5, 1.8, 0, { damage: 13, force: 8.5, growth: 0.06, activeStart: 0.65, activeEnd: 1.08, depth: 0.8 });
+      this.beginAttack(enemy, 'enemy', 'forward', 'RAIL CHARGE', 1.5, 1.8, 0, { id: 'enemy.charge', behavior: 'rush', damage: 13, force: 8.5, growth: 0.06, activeStart: 0.65, activeEnd: 1.08, depth: 0.8 });
     } else if (enemy.kind === 'drone') {
-      this.beginAttack(enemy, 'enemy', 'forward', 'SHOCK DIVE', 1.25, 1.9, 0, { damage: 8, force: 6, activeStart: 0.5, activeEnd: 0.9, depth: 0.9 });
+      this.beginAttack(enemy, 'enemy', 'forward', 'SHOCK DIVE', 1.25, 1.9, 0, { id: 'enemy.dive', behavior: 'rush', damage: 8, force: 6, activeStart: 0.5, activeEnd: 0.9, depth: 0.9 });
     } else if (enemy.kind === 'sentinel') {
-      this.beginAttack(enemy, 'enemy', 'forward', 'SHIELD BASH', 1.1, 2.5, 0, { damage: 10, force: 7, activeStart: 0.58, activeEnd: 0.76 });
+      this.beginAttack(enemy, 'enemy', 'forward', 'SHIELD BASH', 1.1, 2.5, 0, { id: 'enemy.bash', damage: 10, force: 7, activeStart: 0.58, activeEnd: 0.76 });
     } else if (enemy.kind === 'bruiser') {
-      this.beginAttack(enemy, 'enemy', 'down', 'HAMMER SLAM', 1.2, 2.9, 0, { damage: 16, force: 8, growth: 0.06, radial: true, depth: 2, height: 1.15, activeStart: 0.66, activeEnd: 0.86 });
+      this.beginAttack(enemy, 'enemy', 'down', 'HAMMER SLAM', 1.2, 2.9, 0, { id: 'enemy.slam', damage: 16, force: 8, growth: 0.06, radial: true, depth: 2, height: 1.15, activeStart: 0.66, activeEnd: 0.86 });
     } else {
-      this.beginAttack(enemy, 'enemy', 'forward', 'SERVO STRIKE', 0.8, 2.2, 0, { damage: enemy.kind === 'minion' ? 4 : 7, force: enemy.kind === 'minion' ? 3.5 : 5, growth: 0.055, activeStart: 0.36, activeEnd: 0.5 });
+      this.beginAttack(enemy, 'enemy', 'forward', 'SERVO STRIKE', 0.8, 2.2, 0, { id: 'enemy.servo', damage: enemy.kind === 'minion' ? 4 : 7, force: enemy.kind === 'minion' ? 3.5 : 5, growth: 0.055, activeStart: 0.36, activeEnd: 0.5 });
     }
   }
 
@@ -757,7 +772,7 @@ export class GameEngine {
     w.hazards.push(...zones);
     const duration = Math.max(...zones.map(h => h.delay + h.duration)) + 0.7;
     m.cooldown = duration + (enraged ? 0.6 : 1.1);
-    this.beginAttack(enemy, 'enemy', 'down', `GRID / ${pattern.toUpperCase()}`, duration, 0, 0, { activeStart: zones[0]!.delay, activeEnd: duration - 0.7, damage: 0, force: 0 });
+    this.beginAttack(enemy, 'enemy', 'down', `GRID / ${pattern.toUpperCase()}`, duration, 0, 0, { id: `${enemy.bossPhase === 'overdrive' ? 'overdrive' : 'grid'}.${pattern}`, behavior: 'area', activeStart: zones[0]!.delay, activeEnd: duration - 0.7, damage: 0, force: 0 });
   }
 
   private updateHazards(dt: number): void {
@@ -777,15 +792,15 @@ export class GameEngine {
 
   private fireAttack(actor: Actor, strike: Strike): void {
     const w = this.world;
-    if (actor.kind === 'player' && actor.attack?.name.startsWith('CANNON SHOT')) {
-      const facing = actor.attack.direction === 'back' ? -actor.facing : actor.facing;
-      const speed = 14, charged = actor.attack.kind === 'smash';
+    if (actor.kind === 'player' && strike.move.behavior === 'cannon') {
+      const facing = actor.attack!.direction === 'back' ? -actor.facing : actor.facing;
+      const speed = 14, charged = actor.attack!.kind === 'smash';
       const shot: Projectile = { id: `shot-${this.serial++}`, kind: 'bolt', ownerId: actor.id,
         x: actor.x + facing * 0.7, y: actor.y + 1, z: actor.z,
         vx: facing * speed, vy: 0, vz: 0, radius: charged ? 0.38 : 0.22,
-        life: actor.attack.range / speed, color: w.loadout.color };
+        life: actor.attack!.range / speed, color: w.loadout.color };
       w.projectiles.push(shot);
-      this.shots.set(shot.id, { kind: actor.attack.kind, damage: strike.damage, force: strike.force, growth: strike.growth, facing: facing as 1 | -1 });
+      this.shots.set(shot.id, { kind: actor.attack!.kind, damage: strike.damage, force: strike.force, growth: strike.growth, facing: facing as 1 | -1 });
       this.effect('hit', shot.x, shot.y, shot.z, 0.18, charged ? 1 : 0.5, w.loadout.color);
       return;
     }
@@ -802,7 +817,8 @@ export class GameEngine {
       this.shots.set(shot.id, { kind: 'enemy', damage: strike.damage, force: strike.force, growth: strike.growth, facing: actor.facing });
       return;
     }
-    const count = actor.kind === 'boss' ? 3 : 1;
+    const spread = actor.kind === 'player' && strike.move.id === 'special.pulse.split';
+    const count = actor.kind === 'boss' || spread ? 3 : 1;
     for (let index = 0; index < count; index++) {
       const speed = actor.kind === 'player' ? 17 : actor.kind === 'boss' ? 13 : 9;
       const angle = count === 3 ? (index - 1) * 0.25 : 0;
@@ -820,7 +836,7 @@ export class GameEngine {
         color: actor.kind === 'player' ? w.loadout.color : 0xff6b56,
       };
       w.projectiles.push(projectile);
-      this.shots.set(projectile.id, { kind: actor.attack?.kind ?? 'special', damage: strike.damage, force: strike.force, growth: strike.growth, facing: actor.facing });
+      this.shots.set(projectile.id, { kind: actor.attack?.kind ?? 'special', damage: strike.damage, force: strike.force, growth: strike.growth, facing: actor.facing, hit: new Set(), pierce: strike.move.id === 'special.pulse.focused' ? 2 : 1 });
     }
   }
 
@@ -838,7 +854,7 @@ export class GameEngine {
           // attribution prevents a missing owner from cancelling the impact.
           const attacker = source ?? { ...p, id: shot.ownerId, kind: 'artillery' as const, x: shot.x, z: shot.z };
           if (data && Math.hypot(p.x - shot.x, p.z - shot.z) < 2.1 && p.y >= 0 && p.y < 1.4) this.hit(p, attacker, data.damage, data.force, data.growth, 0.8, p.x > shot.x ? 1 : -1, 'enemy');
-          for (const prop of w.props) if (prop.hp > 0 && Math.hypot(prop.x - shot.x, prop.z - shot.z) < 2.1) this.damageProp(prop, 12);
+          for (const prop of w.props) if (prop.hp > 0 && Math.hypot(prop.x - shot.x, prop.z - shot.z) < 2.1) this.damageProp(prop, 12, attacker);
           shot.life = 0;
         }
         continue;
@@ -848,17 +864,18 @@ export class GameEngine {
         if (!prop.alive || prop.hp <= 0 || shot.life <= 0 || shot.y < 0 || shot.y > prop.height) continue;
         if (insideProp(prop, shot.x, shot.z, shot.radius)) {
           const data = this.shots.get(shot.id);
-          if (data) this.damageProp(prop, data.damage);
+          if (data) this.damageProp(prop, data.damage, source);
           shot.life = 0;
         }
       }
       const targets = source.kind === 'player' ? w.enemies : [w.player];
       for (const target of targets) {
-        if (!target.alive || target.invulnerable > 0 || shot.life <= 0) continue;
+        const data = this.shots.get(shot.id);
+        if (!target.alive || target.invulnerable > 0 || shot.life <= 0 || data?.hit?.has(target.id)) continue;
         if (Math.abs(shot.x - target.x) < 0.55 * target.scale + shot.radius && Math.abs(shot.z - target.z) < 0.5 * target.scale + shot.radius && shot.y > target.y - 0.1 && shot.y < target.y + 1.85 * target.scale) {
           const data = this.shots.get(shot.id);
-          if (data) this.hit(target, source, data.damage, data.force, data.growth, 0.45, data.facing, data.kind, shot);
-          shot.life = 0;
+          if (data) { this.hit(target, source, data.damage, data.force, data.growth, 0.45, data.facing, data.kind, shot); data.hit?.add(target.id); data.pierce = (data.pierce ?? 1) - 1; if (data.pierce <= 0) shot.life = 0; }
+          else shot.life = 0;
         }
       }
     }
@@ -909,7 +926,12 @@ export class GameEngine {
       target.armor = Math.max(0, target.armor - damage * (kind === 'smash' ? 1.65 : 1));
       if (target.armor <= 0 && !m.bossBroken) {
         armored = false; m.bossBroken = true;
-        w.message = 'CORE EXPOSED // 吹っ飛ばせ'; w.messageTime = 3.2;
+        if (target.kind === 'boss') {
+          target.bossPhase = 'transition'; target.phaseChanges++; m.phaseTimer = 1.4;
+          w.hazards = []; w.projectiles = []; this.shots.clear(); this.director.reset();
+          target.invulnerable = 1.4;
+        }
+        w.message = target.kind === 'boss' ? 'OVERDRIVE BOOT // 1.4s SAFE WINDOW' : 'CORE EXPOSED // 吹っ飛ばせ'; w.messageTime = 3.2;
         this.effect('shockwave', target.x, 1.3, target.z, 1, 5, 0xffd17c);
         w.events.push({ type: 'boss' });
         w.shake = 0.75;
@@ -927,7 +949,8 @@ export class GameEngine {
       m.actionTimer = armored ? 0.07 : clamp(0.16 + impulse * 0.022, 0.18, 0.85);
     }
     m.forced = armored ? 0.1 : clamp(0.35 + impulse * 0.02, 0.4, 1.2);
-    target.invulnerable = 0.065;
+    if (target.bossPhase === 'transition') { target.state = 'shield'; target.attack = null; m.strike = null; m.actionTimer = 1.4; m.forced = 0; target.vx = target.vy = target.vz = 0; }
+    else target.invulnerable = 0.065;
     this.effect('hit', target.x, target.y + target.scale * 0.85, target.z, 0.32, 0.6 + impulse * 0.045, source.kind === 'player' ? w.loadout.color : 0xff6c65);
     this.effect('text', target.x, target.y + target.scale * 1.8, target.z, 0.8, 1, 0xffffff, `${Math.round(damage)}`);
     w.shake = Math.max(w.shake, Math.min(0.6, impulse * 0.018));
@@ -944,7 +967,8 @@ export class GameEngine {
     }
   }
 
-  private damageProp(prop: ArenaProp, damage: number): void {
+  private damageProp(prop: ArenaProp, damage: number, owner: Actor): void {
+    if ((prop.kind === 'relay' || prop.kind === 'node') && owner.kind !== 'player') return;
     if (!prop.alive || prop.hp <= 0) return;
     prop.hp = Math.max(0, prop.hp - damage);
     this.effect('hit', prop.x, prop.height * 0.7, prop.z, 0.25, 0.8, prop.kind === 'crate' ? 0x65f0b1 : 0xffaa55);
@@ -962,7 +986,7 @@ export class GameEngine {
         if (Math.hypot(actor.x - prop.x, actor.z - prop.z) < 3.2 && actor.y >= -0.1 && actor.y < 2.8) this.hitEnvironment(actor, prop, 24, 9);
       }
       for (const other of this.world.props) {
-        if (other !== prop && other.alive && other.hp > 0 && Math.hypot(other.x - prop.x, other.z - prop.z) < 3) this.damageProp(other, 24);
+        if (other !== prop && other.alive && other.hp > 0 && Math.hypot(other.x - prop.x, other.z - prop.z) < 3) this.damageProp(other, 24, owner);
       }
     }
   }
@@ -1004,11 +1028,16 @@ export class GameEngine {
           const dx = actor.x - prop.x, dz = actor.z - prop.z;
           const px = prop.width / 2 + 0.3 * actor.scale - Math.abs(dx);
           const pz = prop.depth / 2 + 0.3 * actor.scale - Math.abs(dz);
-          if (px < pz) { actor.x += (dx >= 0 ? 1 : -1) * px; actor.vx = 0; }
+          if (px < pz || Math.abs(actor.z + (dz >= 0 ? 1 : -1) * pz) > DEPTH_LIMIT) { actor.x += (dx >= 0 ? 1 : -1) * px; actor.vx = 0; }
           else { actor.z += (dz >= 0 ? 1 : -1) * pz; actor.vz = 0; }
         }
       }
     }
+  }
+
+  private constrainDepth(actor: Actor): void {
+    actor.z = clamp(actor.z, -DEPTH_LIMIT, DEPTH_LIMIT);
+    if (actor.z >= DEPTH_LIMIT && actor.vz > 0 || actor.z <= -DEPTH_LIMIT && actor.vz < 0) actor.vz = 0;
   }
 
   private onPlatform(actor: Actor): boolean {
@@ -1027,9 +1056,10 @@ export class GameEngine {
     const isDroneHovering = actor.kind === 'drone' && m.forced <= 0 && actor.state !== 'hurt' && this.onPlatform(actor);
     if (!isDroneHovering && !(actor.state === 'airdodge' && actor.stateTime < 0.13)) actor.vy -= GRAVITY * dt;
     actor.x += actor.vx * dt; actor.y += actor.vy * dt; actor.z += actor.vz * dt;
+    this.constrainDepth(actor);
     if (wasGrounded && m.forced <= 0 && actor.state !== 'hurt' && actor.state !== 'airdodge' && beforeX >= this.world.arenaMin && beforeX <= this.world.arenaMax && Math.abs(beforeZ) <= PLATFORM_DEPTH) {
       actor.x = clamp(actor.x, this.world.arenaMin + 0.35, this.world.arenaMax - 0.35);
-      actor.z = clamp(actor.z, -3.8, 3.8);
+      this.constrainDepth(actor);
     }
     // Only a downward crossing from the top can land. Moving underneath the
     // platform after falling off must not teleport a fighter back onto it.
@@ -1057,7 +1087,7 @@ export class GameEngine {
       actor.vx *= Math.exp(-dt * drag); actor.vz *= Math.exp(-dt * drag);
     } else if (actor.state === 'dodge') {
       actor.vx *= Math.exp(-dt * 3.6); actor.vz *= Math.exp(-dt * 3.6);
-    } else if (actor.state === 'attack' && !['PHASE SHIFT', 'RAIL CHARGE', 'SHOCK DIVE', 'RIDER PASS', 'LEAP STRIKE'].includes(actor.attack?.name ?? '') && actor.attack?.kind !== 'dash') {
+    } else if (actor.state === 'attack' && !['phase', 'rush', 'leap'].includes(actor.attack?.move?.behavior ?? '') && actor.attack?.kind !== 'dash') {
       actor.vx *= Math.exp(-dt * (grounded ? 14 : 0.8));
       actor.vz *= Math.exp(-dt * (grounded ? 14 : 0.8));
     }
@@ -1123,6 +1153,7 @@ export class GameEngine {
   private spawnWave(): void {
     const w = this.world;
     w.waveTimer = 0;
+    this.director.reset(); w.coordination = emptyCoordination();
     const kinds = w.mode === 'training' ? TRAINING_WAVES[(w.wave - 1) % TRAINING_WAVES.length]! : STAGES[w.sector]!.waves[w.wave - 1]!.enemies;
     for (let index = 0; index < kinds.length; index++) {
       const kind = kinds[index]!;
@@ -1149,6 +1180,25 @@ export class GameEngine {
     if (w.mode !== 'training') w.events.push({ type: 'wave' });
   }
 
+  private updateObjective(dt: number): void {
+    const w = this.world, o = w.objective;
+    if (w.mode === 'training' || w.phase !== 'playing' || o.complete) return;
+    if (o.kind === 'relay' || o.kind === 'nodes') o.progress = w.props.filter(p => p.id.startsWith('objective-') && !p.alive).length;
+    else if (o.kind === 'lockdown' && w.player.alive) {
+      o.elapsed += dt; o.progress = Math.min(o.target, o.elapsed);
+      const pulses = Math.min(2, Math.floor(o.elapsed / 6));
+      while (o.reinforcements < pulses) {
+        o.reinforcements++;
+        for (const sign of [-1, 1]) if (w.enemies.filter(e => e.alive).length < 14) {
+          const e = this.makeActor('minion', w.sector * SECTOR_SPAN + sign * 8, sign * 2.5); e.invulnerable = .8; w.enemies.push(e);
+          this.effect('spawn', e.x, 0, e.z, .8, 1, 0xffdd75);
+        }
+      }
+    }
+    o.complete = o.progress >= o.target;
+    if (o.complete && !o.rewarded) { o.rewarded = true; w.score += 250; w.message = 'OBJECTIVE COMPLETE // GATE ENABLED'; w.messageTime = 3; }
+  }
+
   private completeWave(): void {
     const w = this.world;
     if (w.mode === 'training') {
@@ -1159,7 +1209,7 @@ export class GameEngine {
       w.wave++;
       w.message = `WAVE ${w.wave} // ${STAGES[w.sector]!.waves[w.wave - 1]!.name}`; w.messageTime = 2.5;
       this.spawnWave();
-    } else if (w.sector < STAGES.length - 1) {
+    } else if (w.sector < STAGES.length - 1 && w.objective.complete) {
       w.completedSectors = w.sector + 1;
       w.phase = 'sector-clear'; this.sectorCleared = true;
       w.message = 'SECTOR CLEAR // 補給を選び、次の戦場へ'; w.messageTime = 99;
