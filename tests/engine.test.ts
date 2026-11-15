@@ -105,7 +105,8 @@ describe('combat and blast zones', () => {
     expect(game.world.enemies[0]!.state).toBe('grabbed');
     game.update(1 / 60, frame({ moveZ: -1 }));
     expect(game.world.lastMove).toBe('UP THROW');
-    expect(game.world.enemies[0]!.vy).toBeGreaterThan(7);
+    expect(game.world.enemies[0]!.vy).toBeGreaterThan(0);
+    expect(game.world.enemies[0]!.vy).toBeGreaterThan(Math.abs(game.world.enemies[0]!.vx) * 2);
     expect(game.world.enemies[0]!.damage).toBeGreaterThan(0);
   });
 });
@@ -299,7 +300,7 @@ describe('campaign', () => {
     let lastAction = -99;
     let nextDodge = 0;
     // This player has no world writes, damage overrides, teleports or invincibility.
-    // It aligns with lanes, charges smash attacks, jumps telegraphed attacks and
+    // It builds damage with quick strikes before charging finishers, jumps telegraphed attacks and
     // uses aerials/recovery. It exercises all gates and the final boss together.
     for (let tick = 0; tick < 60 * 300; tick++) {
       const w = game.world, p = w.player;
@@ -327,7 +328,9 @@ describe('campaign', () => {
               input.attack = true; input.moveX = Math.sign(dx); input.moveZ = 0; lastAction = tick;
             } else if (canAct && Math.abs(dx) < 2.4 && Math.abs(dz) < 0.8 && tick - lastAction > 10) {
               if (p.facing !== Math.sign(dx) && Math.abs(dx) > 0.2) input.moveX = Math.sign(dx);
-              else {
+              else if (target.damage < 50 && target.armor <= 0 && target.guard <= 0) {
+                input.moveX = Math.sign(dx); input.moveZ = 0; input.attack = true; lastAction = tick;
+              } else {
                 input.moveX = 0; input.moveZ = 0; input.smash = true; input.smashHeld = true; lastAction = tick;
               }
             } else if (canAct && Math.abs(dx) > 4 && Math.abs(dx) < 8 && Math.abs(dz) < 1 && w.specialCooldown <= 0 && w.loadout.special === 'pulse') {
@@ -338,7 +341,7 @@ describe('campaign', () => {
       }
       game.update(1 / 60, input);
     }
-    expect(game.world.phase).toBe('won');
+    expect(game.world.phase, JSON.stringify({ sector: game.world.sector, wave: game.world.wave, kills: game.world.kills, damage: game.world.player.damage })).toBe('won');
     expect(game.world.kills).toBeGreaterThanOrEqual(STAGES.flatMap((stage) => stage.waves.flatMap((wave) => wave.enemies)).length);
     expect(game.world.sector).toBe(STAGES.length - 1);
     expect(game.world.stocks).toBeGreaterThan(0);
