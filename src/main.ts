@@ -80,6 +80,8 @@ async function main() {
     },
     nextSector: () => engine.nextSector(),
     claimSupply: (choice) => engine.claimSupply(choice),
+    getGraphics: () => scene.getGraphics(),
+    setGraphics: (settings) => scene.setGraphics(settings),
   }, candidates);
 
   const unlock = () => audio.unlock();

@@ -36,6 +36,20 @@ export function attackMotion(attack: AttackVisual, weapon: WeaponId) {
     pose.rightArmY = alternate ? -0.4 : 0.25;
     pose.leftArmY = alternate ? -0.25 : 0.4;
     pose.crouch = -0.12;
+  } else if (weapon === 'lance') {
+    pose.bodyY = -0.45 + swing * 0.5; pose.bodyX = 0.1 + Math.sin(swing * Math.PI) * 0.3;
+    pose.rightArmX = -0.7 - Math.sin(swing * Math.PI * 0.8) * 0.9;
+    pose.rightArmY = 0; pose.leftArmX = -1.3; pose.leftArmY = 0.5;
+    pose.leftLegX = -0.6; pose.rightLegX = 0.4; pose.slashZ = 0; pose.slashX = 0;
+  } else if (weapon === 'cannon') {
+    pose.bodyX = -Math.sin(swing * Math.PI) * 0.3; pose.bodyY = -0.1;
+    pose.rightArmX = -1.5 + Math.sin(swing * Math.PI) * 0.3; pose.rightArmY = 0;
+    pose.leftArmX = -1.2; pose.leftArmY = 0.6; pose.crouch = -0.13; pose.trail = false;
+  } else if (weapon === 'scythe') {
+    pose.bodyY = -1.2 + swing * Math.PI * 2; pose.bodyX = 0.18;
+    pose.rightArmX = -1.25; pose.rightArmY = -0.5 + swing;
+    pose.leftArmX = -1.3; pose.leftArmY = 0.7; pose.slashX = Math.PI / 2;
+    pose.slashZ = 0; pose.slashY = swing * Math.PI * 2;
   }
   if (weapon === 'arc' && attack.kind === 'jab') {
     if (attack.combo === 1) {
@@ -72,7 +86,7 @@ export function attackMotion(attack: AttackVisual, weapon: WeaponId) {
     pose.bodyX = 0.7; pose.rightArmX = -1.4; pose.crouch = -0.2;
   }
   if (attack.name.includes('SHOT') || attack.name.includes('LASER') || attack.name === 'ION PULSE') {
-    pose.bodyY = -0.2; pose.rightArmX = -1.5 + swing * 0.25; pose.rightArmY = 0;
+    pose.bodyY = attack.direction === 'back' ? Math.PI : -0.2; pose.rightArmX = -1.5 + swing * 0.25; pose.rightArmY = 0;
     pose.leftArmX = -1.2; pose.trail = false;
   }
   pose.bodyX *= power;

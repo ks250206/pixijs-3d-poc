@@ -20,6 +20,7 @@ import { attackMotion } from './motion';
 import { STAGES } from '../game/campaign';
 import { RobotView } from './robot';
 import type { RobotAssets } from './robot';
+import { loadGraphics, normalizeGraphics, saveGraphics, sceneResolution, type GraphicsSettings, type GraphicsState } from './graphics';
 
 const COLORS: Record<ActorKind, number> = {
   player: 0x62fff0,
@@ -103,32 +104,35 @@ export class GameScene {
   private viewportHeight = 1;
   private cameraX = 0;
   private currentSector = -1;
+  private playerColor = -1;
   private destroyed = false;
+  private graphics: GraphicsSettings;
+  private readonly lightingAvailable: boolean;
 
   private constructor(app: Application, host: HTMLElement) {
     this.app = app;
     this.host = host;
     this.backend = app.renderer.type === RendererType.WEBGPU ? 'WebGPU' : 'WebGL2';
     const quality = new URLSearchParams(location.search).get('quality');
-    const compatibilityMode = quality === 'compat';
-    const highQuality = quality === 'high';
+    // Accessing localStorage itself may throw in restricted browser contexts.
+    this.graphics = loadGraphics({ getItem: (key) => localStorage.getItem(key) }, quality);
     // The beta generates a float BRDF target even for a hemisphere environment.
     const supportsFloatTargets = app.renderer.type !== RendererType.WEBGL
       || Boolean((app.renderer as WebGLRenderer).context.extensions.colorBufferFloat);
+    this.lightingAvailable = supportsFloatTargets;
     this.view = new View3D({
       width: host.clientWidth || 1280,
       height: host.clientHeight || 720,
       // Isolate scene depth from the Pixi 2D background and combat labels.
       composite: true,
       // Bound PBR fragment work on software/mobile GPUs; Pixi 2D labels stay crisp.
-      // These are texels per CSS pixel. ?quality=high restores native scene detail
-      // for comparing @pixi/3d rendering, while compat reduces the budget further.
-      resolution: highQuality ? 'inherit' : compatibilityMode ? 0.6 : 0.8,
+      // Settings change 3D texels per CSS pixel independently of the UI.
+      resolution: sceneResolution(this.graphics, window.devicePixelRatio),
       toneMapping: 'aces',
       exposure: 1.1,
-      shadowQuality: highQuality ? 'medium' : 'low',
-      shadowFilter: compatibilityMode ? 'hard' : 'pcf',
-      environment: supportsFloatTargets && !compatibilityMode
+      shadowQuality: this.graphics.shadows === 'off' ? 'low' : this.graphics.shadows,
+      shadowFilter: this.graphics.shadows === 'low' || this.graphics.shadows === 'off' ? 'hard' : 'pcf',
+      environment: supportsFloatTargets && this.graphics.lighting
         ? { skyColor: 0x718aa1, groundColor: 0x161f33, intensity: 0.7 }
         : null,
     });
@@ -142,7 +146,7 @@ export class GameScene {
     this.view.camera.near = 0.5;
     this.view.camera.far = 130;
 
-    this.sun = new DirectionalLight({ color: 0xffe2be, intensity: 3.3, castShadow: true });
+    this.sun = new DirectionalLight({ color: 0xffe2be, intensity: 3.3, castShadow: this.graphics.shadows !== 'off' });
     this.sun.position.set(-8, 14, 9);
     this.view.root.addChild(this.sun);
     this.sun.lookAt({ x: 0, y: 0, z: 0 });
@@ -181,6 +185,10 @@ export class GameScene {
       armor,
       glow: Object.fromEntries(Object.entries(COLORS).map(([kind, color]) => [kind, this.glow(color)])) as Record<ActorKind, Material3D>,
     };
+    // Keep player accents independent of shared environment/effect materials.
+    const playerGlow = new Material3D({ baseColor: COLORS.player, emissive: { color: COLORS.player, strength: 2.4 }, roughness: 0.65, metallic: 0, doubleSided: true });
+    this.materials.push(playerGlow);
+    this.assets.glow.player = playerGlow;
     this.accent = this.material(0x37dcd2, 0.55, 0.2);
     this.warningMaterial = this.material(0xff654d, 0.8, 0, 0.22);
     this.slashGeometry = this.makeSlash();
@@ -209,7 +217,7 @@ export class GameScene {
       antialias: params.get('quality') === 'high',
       background: 0x080f19,
       autoDensity: true,
-      resolution: Math.min(window.devicePixelRatio || 1, 1.5),
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoStart: false,
       powerPreference: 'high-performance',
     });
@@ -599,12 +607,31 @@ export class GameScene {
     }
   }
 
+  getGraphics(): GraphicsState {
+    const resolution = sceneResolution(this.graphics, window.devicePixelRatio);
+    return { settings: { ...this.graphics }, width: Math.round(this.viewportWidth * resolution), height: Math.round(this.viewportHeight * resolution), lightingAvailable: this.lightingAvailable };
+  }
+
+  setGraphics(settings: GraphicsSettings): void {
+    const previous = this.graphics;
+    this.graphics = normalizeGraphics(settings);
+    this.sun.castShadow = this.graphics.shadows !== 'off';
+    this.view.shadowQuality = this.graphics.shadows === 'off' ? 'low' : this.graphics.shadows;
+    this.view.shadowFilter = this.graphics.shadows === 'low' || this.graphics.shadows === 'off' ? 'hard' : 'pcf';
+    if (previous.lighting !== this.graphics.lighting) {
+      this.view.environment = this.lightingAvailable && this.graphics.lighting ? { skyColor: 0x718aa1, groundColor: 0x161f33, intensity: 0.7 } : null;
+    }
+    this.resize();
+    saveGraphics({ setItem: (key, value) => localStorage.setItem(key, value) }, this.graphics);
+  }
+
   resize(): void {
     if (this.destroyed) return;
     const width = Math.max(1, this.host.clientWidth);
     const height = Math.max(1, this.host.clientHeight);
     this.viewportWidth = width;
     this.viewportHeight = height;
+    this.view.resolution = sceneResolution(this.graphics, window.devicePixelRatio);
     this.app.renderer.resize(width, height);
     this.view.setSize(width, height);
     const aspect = width / height;
@@ -670,6 +697,10 @@ export class GameScene {
         slash.position.set(actor.x + facing * actor.scale * 0.3, actor.y + (attack.direction === 'down' ? 0.35 : actor.scale * 1.1), actor.z + 0.35 + i * 0.025);
         slash.scale.set(scale * facing * (i ? 0.94 : 1), scale * (i ? 0.94 : 1), 1);
         slash.rotation.set(motion.slashX, motion.slashY, facing * motion.slashZ);
+        if (style === 'lance' && attack.direction !== 'up' && attack.direction !== 'down') {
+          slash.scale.set(scale * facing, 0.16, 1);
+          slash.rotation.set(0, attack.direction === 'back' ? Math.PI : 0, 0);
+        }
         slash.visible = slash.visible && motion.trail;
       }
     }
@@ -783,6 +814,11 @@ export class GameScene {
 
   update(world: WorldState, dt: number): void {
     if (this.destroyed) return;
+    if (this.playerColor !== world.loadout.color) {
+      this.playerColor = world.loadout.color;
+      this.assets.glow.player.baseColor = this.playerColor;
+      this.assets.glow.player.emissive!.color = this.playerColor;
+    }
     if (world.sector !== this.currentSector) {
       this.currentSector = world.sector;
       this.scenery.position.x = world.sector * 28;
@@ -791,7 +827,7 @@ export class GameScene {
     }
     // Snap only on startup; smooth movement follows the engine's arena transition.
     this.cameraX += (world.cameraX - this.cameraX) * Math.min(1, dt * 7);
-    const shake = world.shake * 0.035;
+    const shake = this.graphics.shake ? world.shake * 0.035 : 0;
     const shakeX = Math.sin(world.time * 97) * shake;
     const shakeY = Math.cos(world.time * 113) * shake;
     this.view.camera.position.set(this.cameraX + shakeX, 13 + shakeY, 23);
@@ -816,7 +852,9 @@ export class GameScene {
       }
     }
     const effectIds = new Set<string>();
-    for (const effect of world.effects.slice(-65)) {
+    const visibleEffects = this.graphics.effects === 'full' ? world.effects.slice(-65)
+      : world.effects.filter((effect) => effect.type !== 'trail' && effect.type !== 'spawn').slice(-24);
+    for (const effect of visibleEffects) {
       effectIds.add(effect.id);
       this.updateEffect(effect);
     }
@@ -867,6 +905,9 @@ export class GameScene {
       activeMeshCount: meshes.filter((mesh) => mesh.worldVisible).length,
       appResolution: renderer.resolution,
       viewResolution: this.view.resolution,
+      shadowsEnabled: this.sun.castShadow,
+      environmentEnabled: this.view.environment !== null,
+      graphics: { ...this.graphics },
     };
     if (renderer.type !== RendererType.WEBGL) {
       return { ...scene, webGLVersion: null, pixelSamples: [] };

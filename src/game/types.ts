@@ -5,7 +5,7 @@ export type AttackDirection = 'neutral' | 'forward' | 'back' | 'up' | 'down';
 export type AttackKind = 'jab' | 'tilt' | 'smash' | 'dash' | 'aerial' | 'throw' | 'special' | 'enemy';
 export type GamePhase = 'ready' | 'playing' | 'paused' | 'sector-clear' | 'won' | 'lost';
 export type GameMode = 'campaign' | 'training';
-export type WeaponId = 'arc' | 'pile' | 'razor';
+export type WeaponId = 'arc' | 'pile' | 'razor' | 'lance' | 'cannon' | 'scythe';
 export type SpecialId = 'pulse' | 'blink' | 'vortex';
 export type TraitId = 'lightweight' | 'heavy-duty' | 'overclocked' | 'vampiric' | 'volatile' | 'stable';
 
@@ -173,6 +173,6 @@ export interface WorldState {
 }
 
 export const ENEMY_NAMES: Record<ActorKind, string> = { player: 'YOU', scout: 'SCOUT', bruiser: 'BRUISER', gunner: 'GUNNER', drone: 'DRONE', sentinel: 'SENTINEL', charger: 'CHARGER', leaper: 'LEAPER', artillery: 'ARTILLERY', rider: 'STRIDER', captain: 'COMMANDER', minion: 'MINION', warden: 'THE WARDEN', boss: 'THE ARCHITECT' };
-export const WEAPON_NAMES: Record<WeaponId, string> = { arc: 'ARC BLADE', pile: 'PILE DRIVER', razor: 'RAZOR FISTS' };
+export const WEAPON_NAMES: Record<WeaponId, string> = { arc: 'ARC BLADE', pile: 'PILE DRIVER', razor: 'RAZOR FISTS', lance: 'VOLT LANCE', cannon: 'SIEGE CANNON', scythe: 'ORBIT SCYTHE' };
 export const SPECIAL_NAMES: Record<SpecialId, string> = { pulse: 'ION PULSE', blink: 'PHASE SHIFT', vortex: 'GRAVITY WELL' };
 export const TRAIT_NAMES: Record<TraitId, string> = { lightweight: 'LIGHTWEIGHT', 'heavy-duty': 'HEAVY DUTY', overclocked: 'OVERCLOCKED', vampiric: 'SELF REPAIR', volatile: 'VOLATILE', stable: 'STABILIZED' };

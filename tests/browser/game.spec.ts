@@ -35,7 +35,7 @@ async function boot(page: Page) {
   await page.goto('./?seed=73&debug=1');
   await expect(page.locator('#boot')).toHaveCount(0);
   await expect(page.locator('#scene canvas')).toBeVisible();
-  await expect(page.locator('[data-candidate]')).toHaveCount(3);
+  await expect(page.locator('[data-candidate]')).toHaveCount(6);
 }
 
 async function training(page: Page) {
@@ -101,7 +101,7 @@ test('renders specialist enemies and interactive equipment across sector transit
 test('compatibility mode renders the arena without floating-point environment lighting', async ({ page }) => {
   await page.goto('./?seed=73&debug=1&quality=compat');
   await expect(page.locator('#boot')).toHaveCount(0);
-  await expect(page.locator('[data-candidate]')).toHaveCount(3);
+  await expect(page.locator('[data-candidate]')).toHaveCount(6);
   await expectRenderedArena(page);
 });
 
@@ -119,6 +119,43 @@ test('world map pauses combat, shows five stages, and resumes with Escape', asyn
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toBeHidden();
   await expect.poll(async () => (await snapshot(page)).phase).toBe('playing');
+});
+
+test('graphics controls apply while paused and persist across reloads', async ({ page }) => {
+  await page.goto('./?seed=73&debug=1&play=training');
+  await expect(page.locator('#boot')).toHaveCount(0);
+  await page.locator('.top-actions [data-action=graphics]').click();
+  await expect(page.getByRole('dialog', { name: 'GRAPHICS' })).toBeVisible();
+  expect((await snapshot(page)).phase).toBe('paused');
+  const time = (await snapshot(page)).time;
+  await page.locator('[data-preset=low]').click();
+  await page.locator('[data-graphics=resolution]').selectOption('50');
+  const diagnostics = () => page.evaluate(() => (window as unknown as { __UPRISING__: { scene: { getDiagnostics: () => Record<string, unknown> } } }).__UPRISING__.scene.getDiagnostics());
+  await expect.poll(async () => (await diagnostics()).viewResolution).toBe(0.5);
+  await expect.poll(async () => (await diagnostics()).shadowsEnabled).toBe(false);
+  expect((await diagnostics()).environmentEnabled).toBe(false);
+  expect((await snapshot(page)).time).toBe(time);
+  await expectRenderedArena(page);
+  await page.screenshot({ path: 'test-results/screenshots/08-graphics.png' });
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('playing');
+  await page.reload();
+  await expect(page.locator('#boot')).toHaveCount(0);
+  expect((await diagnostics()).viewResolution).toBe(0.5);
+  await page.locator('.top-actions [data-action=graphics]').click();
+  await page.locator('[data-preset=high]').click();
+  await expect.poll(async () => (await diagnostics()).viewResolution).toBe(1);
+  expect((await diagnostics()).shadowsEnabled).toBe(true);
+  expect((await diagnostics()).environmentEnabled).toBe(true);
+  await page.locator('[data-graphics=effects]').selectOption('reduced');
+  await page.locator('[data-graphics=shake]').uncheck();
+  await expectRenderedArena(page);
+  await page.getByRole('button', { name: 'グラフィック設定を閉じる' }).click();
+  await page.locator('[data-action=pause]').click();
+  await page.locator('.pause-dialog [data-action=graphics]').click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.pause-dialog')).toBeVisible();
+  expect((await snapshot(page)).phase).toBe('paused');
 });
 
 test('cleared-stage supplies apply once and route departure enters the next stage', async ({ page }) => {
@@ -169,6 +206,31 @@ test('renders the expanded roster and distinct stage scenery', async ({ page }) 
     await expect.poll(async () => (await snapshot(page)).wave).toBe(wave);
     await expectRenderedArena(page);
     if (wave > 2) await page.screenshot({ path: `test-results/screenshots/roster-${wave}.png` });
+  }
+  expect(errors).toEqual([]);
+});
+
+test('selects and plays each new fighting style with its own attack', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await boot(page);
+  for (const [weapon, move] of [['lance', 'LANCE'], ['cannon', 'CANNON SHOT'], ['scythe', 'ORBIT']]) {
+    await page.locator(`[data-weapon=${weapon}]`).click();
+    await expect(page.locator(`[data-weapon=${weapon}]`)).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('[data-hud=selectedDescription]')).not.toBeEmpty();
+    await page.locator('[data-mode=training]').click();
+    await page.locator('[data-action=start]').click();
+    await expect.poll(async () => (await snapshot(page)).loadout.weapon).toBe(weapon);
+    await expect.poll(async () => (await snapshot(page)).player.invulnerable).toBe(0);
+    await page.keyboard.press('j');
+    await expect.poll(async () => (await snapshot(page)).lastMove).toContain(move);
+    await expectRenderedArena(page);
+    await page.screenshot({ path: `test-results/screenshots/player-${weapon}.png` });
+    await expect.poll(async () => (await snapshot(page)).player.state).toBe('idle');
+    await page.screenshot({ path: `test-results/screenshots/player-${weapon}-ready.png` });
+    await page.keyboard.press('Escape');
+    await page.locator('[data-action=new-run]').click();
+    await expect(page.locator('[data-candidate]')).toHaveCount(6);
   }
   expect(errors).toEqual([]);
 });
@@ -241,6 +303,11 @@ test('touch controls work in landscape and menu fits portrait', async ({ browser
   expect(await page.getByRole('dialog').evaluate((element) => element.scrollWidth <= element.clientWidth + 2)).toBe(true);
   await page.screenshot({ path: 'test-results/screenshots/07-mobile-map.png' });
   await page.getByRole('button', { name: 'ワールドマップを閉じる' }).click();
+  await page.locator('.top-actions [data-action=graphics]').click();
+  await expect(page.getByRole('dialog', { name: 'GRAPHICS' })).toBeVisible();
+  expect(await page.getByRole('dialog').evaluate((element) => element.scrollWidth <= element.clientWidth + 2)).toBe(true);
+  await page.screenshot({ path: 'test-results/screenshots/09-mobile-graphics.png' });
+  await page.getByRole('button', { name: 'グラフィック設定を閉じる' }).click();
   await page.locator('[data-action=pause]').click();
   await page.locator('[data-action=new-run]').click();
   await expect(page.locator('[data-action=start]')).toBeVisible();
