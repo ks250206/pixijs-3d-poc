@@ -22,13 +22,13 @@ const training = () => {
 };
 
 describe('seeded chassis', () => {
-  it('reproduces three distinct, mechanically meaningful loadouts', () => {
+  it('reproduces six distinct, mechanically meaningful loadouts', () => {
     expect(createCandidates(73)).toEqual(createCandidates(73));
     expect(createCandidates(73)).not.toEqual(createCandidates(74));
     const choices = createCandidates(73);
-    expect(new Set(choices.map((item) => item.weapon)).size).toBe(3);
+    expect(new Set(choices.map((item) => item.weapon)).size).toBe(6);
     expect(new Set(choices.map((item) => item.special)).size).toBe(3);
-    expect(new Set(choices.map((item) => item.trait)).size).toBe(3);
+    expect(new Set(choices.map((item) => item.trait)).size).toBe(6);
     expect(new Set(choices.map((item) => item.speed)).size).toBeGreaterThan(1);
     for (const choice of choices) {
       expect(choice.power).toBeGreaterThan(0);

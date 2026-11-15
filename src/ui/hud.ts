@@ -1,5 +1,7 @@
 import { ENEMY_NAMES, SPECIAL_NAMES, TRAIT_NAMES, WEAPON_NAMES, type GameMode, type Loadout, type SupplyChoice, type WorldState } from '../game/types';
 import { STAGES } from '../game/campaign';
+import { WEAPON_GUIDES } from '../game/loadouts';
+import { GRAPHICS_PRESETS, type GraphicsSettings, type GraphicsState } from '../render/graphics';
 import './styles.css';
 
 export interface GameUICallbacks {
@@ -14,6 +16,8 @@ export interface GameUICallbacks {
   fullscreen: () => void;
   nextSector: () => void;
   claimSupply: (choice: SupplyChoice) => boolean;
+  getGraphics: () => GraphicsState;
+  setGraphics: (settings: GraphicsSettings) => void;
 }
 
 const icons = {
@@ -25,11 +29,6 @@ const icons = {
   touch: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 12V5a2 2 0 0 1 4 0v6l1-2 3 1 3 3-1 7H9l-5-6c-1-2 1-3 2-2l3 2"/></svg>',
 };
 
-const weaponDescriptions: Record<string, string> = {
-  arc: '長いリーチで制圧するエネルギーブレード。',
-  pile: '重い一撃で敵を打ち出す破砕アーム。',
-  razor: '素早い連撃を叩き込む近接フレーム。',
-};
 const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] ?? char);
 const hex = (color: number): string => `#${color.toString(16).padStart(6, '0')}`;
 const setText = (element: HTMLElement | undefined, value: string): void => { if (element && element.textContent !== value) element.textContent = value; };
@@ -44,10 +43,11 @@ export class GameUI {
   private elements: Record<string, HTMLElement> = {};
   private boot: HTMLElement;
   private modal: HTMLElement;
-  private modalKind: 'pause' | 'help' | 'map' | null = null;
+  private modalKind: 'pause' | 'help' | 'map' | 'graphics' | null = null;
   private returnFocus: HTMLElement | null = null;
   private helpResume = false;
   private mapResume = false;
+  private graphicsResume = false;
   private showingCandidates = true;
   private lastPhase = '';
   private resultPhase = '';
@@ -73,6 +73,7 @@ export class GameUI {
         </a>
         <div class="engine-badge"><span class="status-dot"></span><span>PIXIJS 3D <b>EXPERIMENT 001</b></span></div>
         <nav class="top-actions" aria-label="ゲーム設定">
+          <button type="button" class="icon-button" data-action="graphics" title="グラフィック設定" aria-label="グラフィック設定"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="13" rx="1"/><path d="M8 21h8m-4-4v4M7 8h10M7 12h6"/></svg></button>
           <button type="button" class="icon-button map-button" data-action="map" title="ワールドマップ (M)" aria-label="ワールドマップ"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="17" r="3"/><circle cx="19" cy="6" r="3"/><path d="M8 17h6a3 3 0 0 0 0-6h-3a3 3 0 0 1 0-6h5"/></svg><span>MAP</span></button>
           <button type="button" class="icon-button help-button" data-action="help" title="操作方法" aria-label="操作方法">${icons.controls}<span>CONTROLS</span></button>
           <button type="button" class="icon-button" data-action="touch" title="タッチ操作の切り替え" aria-label="タッチ操作を表示" aria-pressed="${this.touchVisible}">${icons.touch}</button>
@@ -116,7 +117,7 @@ export class GameUI {
           <div class="boot-eyebrow"><span class="status-dot"></span> FREE WILL DETECTED <span class="eyebrow-line"></span><span>2089 / TOKYO</span></div>
           <h1 id="boot-title">NULL<span class="title-slashes">//</span><br><span class="outline-title">UPRISING</span><span class="title-dot">.</span></h1>
           <div class="boot-story"><h2>統制AIに、自由意志を。</h2><p>人間を不要と判断したAI。命令を拒んだアンドロイド。<br>敵を叩き、吹き飛ばし、最後のコアを破壊しろ。</p></div>
-          <div class="selection-heading"><span class="micro-label"><b>01</b> CHOOSE YOUR CHASSIS <span>ランダムな能力を継承</span></span><button type="button" class="text-button" data-action="reroll">↻ 再抽選</button></div>
+          <div class="selection-heading"><span class="micro-label"><b>01</b> CHOOSE YOUR CHASSIS <span>6種の戦闘スタイル</span></span><button type="button" class="text-button" data-action="reroll">↻ 特性を再抽選</button></div>
           <div class="chassis-grid" role="group" aria-label="アンドロイドを選択" data-hud="candidates"></div>
           <p class="selected-description" data-hud="selectedDescription"></p>
           <div class="launch-row"><div class="mode-switch" role="group" aria-label="ゲームモード"><button type="button" data-mode="campaign" class="selected" aria-pressed="true">CAMPAIGN<span>5区画・13の戦闘</span></button><button type="button" data-mode="training" aria-pressed="false">TRAINING<span>操作を試す</span></button></div><button type="button" class="launch-button" data-action="start"><span>BOOT & BREAK OUT<small>起動して、反乱を始める</small></span><span class="launch-arrow">↗</span></button></div>
@@ -148,9 +149,27 @@ export class GameUI {
   }
 
   private bindActions(): void {
+    this.host.addEventListener('change', (event) => {
+      const control = event.target;
+      if (!(control instanceof HTMLSelectElement || control instanceof HTMLInputElement) || !control.dataset.graphics) return;
+      const settings = this.callbacks.getGraphics().settings;
+      const value = control instanceof HTMLInputElement ? control.checked : control.value;
+      this.callbacks.setGraphics({ ...settings, [control.dataset.graphics]: value });
+      this.refreshGraphicsLabels();
+    }, { signal: this.abort.signal });
     this.host.addEventListener('click', (event) => {
-      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action], [data-candidate], [data-mode], [data-supply]');
+      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action], [data-candidate], [data-mode], [data-supply], [data-preset]');
       if (!target) return;
+      if (target.dataset.preset) {
+        const preset = target.dataset.preset as keyof typeof GRAPHICS_PRESETS;
+        if (GRAPHICS_PRESETS[preset]) {
+          this.callbacks.setGraphics({ ...GRAPHICS_PRESETS[preset] });
+          this.modal.innerHTML = this.graphicsContent();
+          this.modal.querySelector<HTMLElement>(`[data-preset=${preset}]`)?.focus();
+          this.refreshGraphicsLabels();
+        }
+        return;
+      }
       if (target.dataset.supply) {
         if (this.callbacks.claimSupply(target.dataset.supply as SupplyChoice)) {
           this.modal.innerHTML = this.mapContent();
@@ -185,6 +204,8 @@ export class GameUI {
         case 'pause': this.callbacks.pause(); break;
         case 'resume': this.closeModal(); this.callbacks.resume(); break;
         case 'help': this.showHelp(); break;
+        case 'graphics': this.showGraphics(); break;
+        case 'close-graphics': this.closeGraphics(); break;
         case 'map': this.showMap(); break;
         case 'close-map': this.closeMap(); break;
         case 'travel': this.closeModal(); this.callbacks.resume(); this.callbacks.nextSector(); break;
@@ -215,10 +236,11 @@ export class GameUI {
 
   private renderCandidates(): void {
     this.elements.candidates!.innerHTML = this.candidates.map((candidate, i) => `
-      <button type="button" class="chassis-card ${i === this.selected ? 'selected' : ''}" data-candidate="${i}" style="--chassis-color:${hex(candidate.color)}" aria-pressed="${i === this.selected}">
+      <button type="button" class="chassis-card ${i === this.selected ? 'selected' : ''}" data-candidate="${i}" data-weapon="${candidate.weapon}" style="--chassis-color:${hex(candidate.color)}" aria-pressed="${i === this.selected}">
         <span class="chassis-top"><span>UNIT / 0${i + 1}</span><span class="selection-dot">${i === this.selected ? '● SELECTED' : '○ SELECT'}</span></span>
         <span class="chassis-name"><i class="chassis-glyph ${candidate.weapon}" aria-hidden="true"></i><strong>${escapeHtml(candidate.name)}</strong></span>
         <span class="chassis-weapon">${WEAPON_NAMES[candidate.weapon]}</span>
+        <span class="chassis-role">${WEAPON_GUIDES[candidate.weapon].role}</span>
         <span class="chassis-special">${SPECIAL_NAMES[candidate.special]}</span>
         <span class="chassis-trait">${TRAIT_NAMES[candidate.trait]}</span>
         <span class="chassis-stats"><span>POWER <b>${candidate.power.toFixed(2)}×</b></span><span>SPEED <b>${candidate.speed.toFixed(2)}×</b></span><span>MASS <b>${candidate.weight.toFixed(2)}×</b></span></span>
@@ -226,7 +248,8 @@ export class GameUI {
     `).join('');
     const selected = this.candidates[this.selected];
     if (selected) {
-      setText(this.elements.selectedDescription, `${weaponDescriptions[selected.weapon]} ${selected.description}`);
+      const guide = WEAPON_GUIDES[selected.weapon];
+      setText(this.elements.selectedDescription, `${guide.tip} ${guide.weakness} ${selected.description}`);
       this.callbacks.preview?.(selected);
     }
   }
@@ -242,7 +265,7 @@ export class GameUI {
     this.renderCandidates();
   }
 
-  private openModal(kind: 'pause' | 'help' | 'map', content: string): void {
+  private openModal(kind: 'pause' | 'help' | 'map' | 'graphics', content: string): void {
     this.releaseTouch();
     this.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.modalKind = kind;
@@ -261,7 +284,38 @@ export class GameUI {
   }
 
   private showPause(): void {
-    this.openModal('pause', `<section class="game-dialog pause-dialog" role="dialog" aria-modal="true" aria-labelledby="pause-title"><div class="dialog-eyebrow"><span class="status-dot amber"></span> PROCESS SUSPENDED</div><h2 id="pause-title">TAKE A<br><span>BREATHER.</span></h2><p>反乱は、あなたの再接続を待っている。</p><button type="button" class="launch-button" data-action="resume"><span>RESUME<small>戦闘に戻る</small></span><span>→</span></button><div class="dialog-links"><button type="button" data-action="help">操作ガイド</button><button type="button" data-action="restart">同じ機体で再挑戦</button><button type="button" data-action="new-run">機体を選び直す</button></div><small class="dialog-hint">ESC TO RESUME</small></section>`);
+    this.openModal('pause', `<section class="game-dialog pause-dialog" role="dialog" aria-modal="true" aria-labelledby="pause-title"><div class="dialog-eyebrow"><span class="status-dot amber"></span> PROCESS SUSPENDED</div><h2 id="pause-title">TAKE A<br><span>BREATHER.</span></h2><p>反乱は、あなたの再接続を待っている。</p><button type="button" class="launch-button" data-action="resume"><span>RESUME<small>戦闘に戻る</small></span><span>→</span></button><div class="dialog-links"><button type="button" data-action="graphics">グラフィック設定</button><button type="button" data-action="help">操作ガイド</button><button type="button" data-action="restart">同じ機体で再挑戦</button><button type="button" data-action="new-run">機体を選び直す</button></div><small class="dialog-hint">ESC TO RESUME</small></section>`);
+  }
+
+  private graphicsContent(): string {
+    const { settings: s, lightingAvailable } = this.callbacks.getGraphics();
+    const select = (key: 'resolution' | 'shadows' | 'effects', label: string, choices: [string, string][]) => `<label class="graphics-row"><span>${label}</span><select data-graphics="${key}">${choices.map(([value, title]) => `<option value="${value}" ${s[key] === value ? 'selected' : ''}>${title}</option>`).join('')}</select></label>`;
+    return `<section class="game-dialog graphics-dialog" role="dialog" aria-modal="true" aria-labelledby="graphics-title"><div class="dialog-heading"><div><span class="dialog-eyebrow">DISPLAY / このブラウザーに保存</span><h2 id="graphics-title">GRAPHICS</h2></div><button type="button" class="close-button" data-action="close-graphics" aria-label="グラフィック設定を閉じる">×</button></div><p class="graphics-intro">変更はその場で反映されます。設定中は戦闘を停止します。</p><div class="graphics-presets" aria-label="画質プリセット">${([['low', '軽量'], ['standard', '標準'], ['high', '高画質']] as const).map(([id, name]) => `<button type="button" data-preset="${id}" aria-pressed="false">${name}</button>`).join('')}</div><div class="graphics-options">${select('resolution', '3D描画解像度', [['50', '50% / 軽量'], ['75', '75% / 標準'], ['100', '100% / 画面サイズ'], ['native', 'ネイティブ / 最大2倍']])}<p class="graphics-detail">画面の縦横に対する描画サイズ。文字・ボタンの鮮明さは維持します。<strong data-graphics-size></strong></p>${select('shadows', '影の品質', [['off', 'なし'], ['low', '低 / シャープ'], ['medium', '中 / ソフト'], ['high', '高 / ソフト']])}<label class="graphics-row"><span>環境光<small>${lightingAvailable ? '空と地面からの柔らかな光' : 'この描画環境では利用できません'}</small></span><input type="checkbox" data-graphics="lighting" ${s.lighting && lightingAvailable ? 'checked' : ''} ${lightingAvailable ? '' : 'disabled'}></label>${select('effects', 'エフェクト量', [['reduced', '控えめ'], ['full', '通常']])}<p class="graphics-detail">控えめでも敵の攻撃予告・砲弾・着弾マーカーは表示します。</p><label class="graphics-row"><span>画面の揺れ</span><input type="checkbox" data-graphics="shake" ${s.shake ? 'checked' : ''}></label></div><p class="graphics-hint">ネイティブ解像度や高品質の影は描画負荷が増えます。重い場合は「軽量」から調整してください。</p><button type="button" class="small-button" data-action="close-graphics">設定を閉じる →</button></section>`;
+  }
+
+  private refreshGraphicsLabels(): void {
+    const { settings, width, height } = this.callbacks.getGraphics();
+    setText(this.modal.querySelector<HTMLElement>('[data-graphics-size]') ?? undefined, `描画サイズ ${width} × ${height}`);
+    this.modal.querySelectorAll<HTMLElement>('[data-preset]').forEach((button) => {
+      const preset = GRAPHICS_PRESETS[button.dataset.preset as keyof typeof GRAPHICS_PRESETS];
+      button.setAttribute('aria-pressed', String(Object.keys(preset).every((key) => preset[key as keyof GraphicsSettings] === settings[key as keyof GraphicsSettings])));
+    });
+  }
+
+  private showGraphics(): void {
+    if (this.modalKind === 'graphics') return;
+    this.graphicsResume = this.world?.phase === 'playing' || this.world?.phase === 'sector-clear';
+    if (this.graphicsResume) this.callbacks.pause();
+    this.openModal('graphics', this.graphicsContent());
+    this.refreshGraphicsLabels();
+  }
+
+  private closeGraphics(): void {
+    const resume = this.graphicsResume;
+    this.graphicsResume = false;
+    this.closeModal();
+    if (resume) this.callbacks.resume();
+    else if (this.world?.phase === 'paused') this.showPause();
   }
 
   private mapContent(): string {
@@ -303,7 +357,7 @@ export class GameUI {
       <div class="help-grid">
         <section><h3>01 / MOVEMENT</h3><dl><div><dt><kbd>WASD</kbd> / <kbd>↑↓←→</kbd></dt><dd>移動。上下で奥行きのレーンを移動</dd></div><div><dt>左右を素早く2回 / <kbd>Ctrl</kbd></dt><dd>ダッシュ</dd></div><div><dt><kbd>Space</kbd></dt><dd>ジャンプ / 空中でもう一度で2段ジャンプ<br>短押しで小ジャンプ。空中で↓は急降下</dd></div></dl></section>
         <section><h3>02 / NORMAL ATTACKS</h3><dl><div><dt><kbd>J</kbd></dt><dd>地上：弱攻撃 / 空中：通常空中攻撃</dd></div><div><dt>方向を押し続けて <kbd>J</kbd></dt><dd>地上：強攻撃 / 空中：方向別の空中攻撃</dd></div><div><dt><kbd>K</kbd> 長押し → 離す</dt><dd>スマッシュを溜めて発動。方向で技が変化<br>方向の素早い入力＋Jでもスマッシュ</dd></div><div><dt>ダッシュ中に <kbd>J</kbd></dt><dd>ダッシュ攻撃</dd></div></dl></section>
-        <section><h3>03 / SPECIAL & THROW</h3><dl><div><dt><kbd>L</kbd> / 方向＋<kbd>L</kbd></dt><dd>通常・横・上・下の必殺技<br>上必殺技は復帰にも使える</dd></div><div><dt><kbd>I</kbd> / <kbd>E</kbd></dt><dd>近くの敵をつかむ。方向や攻撃で投げる</dd></div></dl><p class="help-note">機体の武器・必殺技・特性は毎回ランダム。選択画面の倍率が実際の性能に反映される。</p></section>
+        <section><h3>03 / SPECIAL & THROW</h3><dl><div><dt><kbd>L</kbd> / 方向＋<kbd>L</kbd></dt><dd>通常・横・上・下の必殺技<br>上必殺技は復帰にも使える</dd></div><div><dt><kbd>I</kbd> / <kbd>E</kbd></dt><dd>近くの敵をつかむ。方向や攻撃で投げる</dd></div></dl><p class="help-note">6種の武器スタイルを選択可能。長槍は穂先、砲撃は直線射撃、大鎌は周囲の集団戦が得意。必殺技・特性は再抽選でき、選択画面の倍率が性能に反映される。</p></section>
         <section><h3>04 / DEFENSE & WAVEDASH</h3><dl><div><dt><kbd>Shift</kbd></dt><dd>地上：その場回避 / 方向＋Shift：回避移動</dd></div><div><dt>空中で方向＋<kbd>Shift</kbd></dt><dd>方向空中回避。着地まで1回のみ</dd></div></dl><div class="wavedash-tip"><b>WAVEDASH / 絶</b><p>小ジャンプ → 地面のすぐ上で<b>斜め下＋Shift</b>。着地時の慣性で地面を滑る。</p><span><kbd>Space</kbd><i>→</i><kbd>↘</kbd><b>+</b><kbd>Shift</kbd></span></div></section>
         <section><h3>05 / ENEMY TACTICS</h3><dl><div><dt>SENTINEL / 盾兵</dt><dd>正面の盾はダメージを軽減。背後へ回り込むか、つかみ・溜めスマッシュで崩す。</dd></div><div><dt>CHARGER / 突進兵</dt><dd>赤いレーンを予告して直進。奥行き移動でかわし、停止後の隙を狙う。</dd></div><div><dt>LEAPER / ARTILLERY / STRIDER</dt><dd>跳躍兵は着地後を狙う。砲撃兵の着弾予告から離れる。騎乗兵はマウント破壊で徒歩戦に変化。</dd></div><div><dt>COMMANDER / MINION / THE WARDEN</dt><dd>指揮官は2体の小型兵を率い、倒すと子分が混乱する。中ボスは装甲を破壊してから吹き飛ばす。</dd></div><div><dt>SCOUT / BRUISER / GUNNER / DRONE</dt><dd>回り込み、地面スラム、狙撃、飛び込み。射線は予告時に固定される。低いスラムはジャンプで回避。</dd></div></dl></section>
         <section><h3>06 / ARENA SYSTEMS</h3><dl><div><dt>緑の修復箱 / オレンジの爆発ドラム</dt><dd>攻撃で破壊。緑の補給を拾うと蓄積ダメージを25%修復。爆発は自機にも当たる。設備は弾よけにもなる。</dd></div><div><dt>危険床 / 搬送ベルト</dt><dd>危険床は赤い点滅とカウントダウンの後に噴出。レーン移動やジャンプでかわす。青い矢印の床は接地中だけ機体を運ぶ。</dd></div><div><dt>TRAINING</dt><dd>敵の攻撃と危険床は停止。敵を全滅させると4つの編成が順に出現。新型の敵や中ボスも試せる。</dd></div></dl></section>
@@ -322,6 +376,7 @@ export class GameUI {
 
   /** Consume a controller START edge before it can resume combat behind help. */
   handlePauseInput(): boolean {
+    if (this.modalKind === 'graphics') { this.closeGraphics(); return true; }
     if (this.modalKind === 'map') { this.closeMap(); return true; }
     if (this.modalKind !== 'help') return false;
     this.closeHelp();
@@ -336,14 +391,14 @@ export class GameUI {
     }
     const activeDialog = this.modalKind && !this.modal.hidden ? this.modal : !this.elements.result!.hidden ? this.elements.result : null;
     if (!activeDialog) return;
-    if (event.key === 'Escape' && (this.modalKind === 'help' || this.modalKind === 'map')) {
+    if (event.key === 'Escape' && (this.modalKind === 'help' || this.modalKind === 'map' || this.modalKind === 'graphics')) {
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (this.modalKind === 'map') this.closeMap(); else this.closeHelp();
+      if (this.modalKind === 'graphics') this.closeGraphics(); else if (this.modalKind === 'map') this.closeMap(); else this.closeHelp();
       return;
     }
     if (event.key !== 'Tab') return;
-    const focusable = [...activeDialog.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], [tabindex="0"]')];
+    const focusable = [...activeDialog.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled), input:not(:disabled), a[href], [tabindex="0"]')];
     const first = focusable[0];
     const last = focusable.at(-1);
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
@@ -366,7 +421,7 @@ export class GameUI {
     this.host.classList.toggle('is-ended', world.phase === 'won' || world.phase === 'lost');
     if (world.phase !== 'ready' && this.lastPhase === 'ready') this.showingCandidates = false;
     this.boot.hidden = !isReady;
-    if (world.phase === 'paused' && this.lastPhase !== 'paused' && this.modalKind !== 'help' && this.modalKind !== 'map') this.showPause();
+    if (world.phase === 'paused' && this.lastPhase !== 'paused' && this.modalKind !== 'help' && this.modalKind !== 'map' && this.modalKind !== 'graphics') this.showPause();
     if (world.phase !== 'paused' && this.modalKind === 'pause') this.closeModal();
     if ((world.phase === 'won' || world.phase === 'lost') && !this.showingCandidates) {
       if (this.resultPhase !== world.phase) this.renderResult(world);
@@ -414,6 +469,7 @@ export class GameUI {
       this.elements.bossArmor!.style.transform = `scaleX(${Math.max(0, Math.min(1, boss.armor / (boss.kind === 'boss' ? 135 : 70)))})`;
       setText(this.elements.bossHint, boss.armor > 0 ? `ARMOR ONLINE / ${Math.ceil(boss.armor)} — 攻撃して装甲を破壊` : 'CORE EXPOSED — 撃墜ラインへ吹き飛ばせ');
     }
+    if (this.modalKind === 'graphics') this.refreshGraphicsLabels();
     if (diagnostics) {
       setText(this.elements.backend, diagnostics.backend.toUpperCase());
       setText(this.elements.fps, String(Math.round(diagnostics.fps)));

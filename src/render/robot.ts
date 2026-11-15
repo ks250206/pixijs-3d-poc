@@ -41,6 +41,10 @@ export class RobotView {
   private readonly hammer = new Container3D();
   private readonly fist = new Container3D();
   private readonly offhand = new Container3D();
+  private readonly lance = new Container3D();
+  private readonly cannon = new Container3D();
+  private readonly scythe = new Container3D();
+  private readonly chassisDetails = new Map<WeaponId, Container3D>();
   private readonly guardPlate = new Container3D();
   private readonly mount = new Container3D();
   private readonly mountLegs: Container3D[] = [];
@@ -246,7 +250,7 @@ export class RobotView {
     }
 
     if (this.kind === 'player') {
-      this.rightArm.addChild(this.blade, this.hammer, this.fist);
+      this.rightArm.addChild(this.blade, this.hammer, this.fist, this.lance, this.cannon, this.scythe);
       this.blade.position.set(0, -0.74, 0.12);
       this.box(this.blade, a.trim, 0, 0, 0.2, 0.16, 0.15, 0.4, false);
       this.box(this.blade, a.white, 0, 0, 0.65, 0.075, 0.14, 0.85, false);
@@ -261,6 +265,47 @@ export class RobotView {
       this.leftArm.addChild(this.offhand);
       this.box(this.offhand, a.white, 0, -0.71, 0.21, 0.35, 0.3, 0.4, false);
       for (const x of [-0.1, 0, 0.1]) this.box(this.offhand, glow, x, -0.66, 0.63, 0.035, 0.06, 0.6, false);
+
+      // Long weapons follow the forearm axis, extending from the gripping hand.
+      this.lance.position.set(0, -0.74, 0.12);
+      this.box(this.lance, a.trim, 0, -0.5, 0, 0.085, 2.8, 0.085, false);
+      this.box(this.lance, a.white, 0, -1.95, 0, 0.2, 0.62, 0.1, false);
+      this.box(this.lance, glow, 0, -2.2, 0, 0.09, 0.65, 0.14, false);
+      this.box(this.lance, glow, 0, -1.65, 0, 0.45, 0.07, 0.15, false);
+      this.cannon.position.set(0, -0.68, 0.06);
+      this.box(this.cannon, a.trim, 0, -0.28, 0, 0.56, 0.9, 0.58);
+      this.box(this.cannon, a.white, 0, -0.7, 0, 0.36, 0.65, 0.4);
+      this.box(this.cannon, glow, 0, -1.04, 0, 0.28, 0.05, 0.3, false);
+      for (const y of [-0.15, -0.3, -0.45]) this.box(this.cannon, glow, 0.29, y, 0, 0.03, 0.06, 0.4, false);
+      this.scythe.position.set(0, -0.74, 0.12);
+      this.box(this.scythe, a.trim, 0, -0.38, 0, 0.1, 2.15, 0.1, false);
+      for (let i = 0; i < 5; i++) {
+        const blade = this.box(this.scythe, i < 3 ? a.white : glow, 0, -1.45 + i * i * 0.035, 0.23 + i * 0.24, 0.1, 0.21 - i * 0.025, 0.42 - i * 0.04, false);
+        blade.rotation.x = -i * 0.16;
+      }
+      for (const weapon of ['arc', 'pile', 'razor', 'lance', 'cannon', 'scythe'] as const) {
+        const detail = new Container3D(); detail.label = `chassis-${weapon}`;
+        this.body.addChild(detail); this.chassisDetails.set(weapon, detail);
+        if (weapon === 'pile' || weapon === 'cannon') {
+          for (const side of [-1, 1]) this.box(detail, a.white, side * 0.48, 0.5, 0, 0.42, 0.4, 0.6);
+          this.box(detail, a.trim, 0, 0.25, -0.45, weapon === 'cannon' ? 0.85 : 0.65, 0.75, 0.36);
+          if (weapon === 'cannon') for (const x of [-0.25, 0.25]) this.box(detail, glow, x, 0.3, -0.65, 0.12, 0.5, 0.06, false);
+        } else if (weapon === 'lance') {
+          this.box(detail, glow, 0, 1.3, -0.04, 0.09, 0.45, 0.4, false);
+          this.box(detail, a.white, -0.48, 0.55, -0.1, 0.22, 0.7, 0.55);
+        } else if (weapon === 'scythe') {
+          for (const side of [-1, 1]) {
+            const fin = this.box(detail, a.trim, side * 0.34, 0.1, -0.4, 0.28, 1.25, 0.12);
+            fin.rotation.z = side * 0.25;
+            this.box(detail, glow, side * 0.25, 1.17, 0, 0.12, 0.22, 0.12, false);
+          }
+        } else if (weapon === 'razor') {
+          for (const side of [-1, 1]) {
+            const fin = this.box(detail, glow, side * 0.4, 0.5, -0.4, 0.1, 0.65, 0.35, false);
+            fin.rotation.z = side * 0.6;
+          }
+        } else this.box(detail, a.white, -0.47, 0.5, 0, 0.26, 0.27, 0.45);
+      }
     }
   }
 
@@ -311,6 +356,10 @@ export class RobotView {
       this.hammer.visible = weapon === 'pile';
       this.fist.visible = weapon === 'razor';
       this.offhand.visible = weapon === 'razor';
+      this.lance.visible = weapon === 'lance';
+      this.cannon.visible = weapon === 'cannon';
+      this.scythe.visible = weapon === 'scythe';
+      this.chassisDetails.forEach((detail, id) => { detail.visible = weapon === id; });
     }
     this.guardPlate.visible = actor.guard > 0;
 
@@ -345,6 +394,13 @@ export class RobotView {
     this.rightArm.rotation.set(running ? -stride * 0.65 : -0.15, 0, -0.08);
     this.leftLeg.rotation.set(running ? -stride * 0.7 : 0, 0, 0);
     this.rightLeg.rotation.set(running ? stride * 0.7 : 0, 0, 0);
+    if (this.kind === 'player') {
+      if (weapon === 'cannon' || weapon === 'lance' || weapon === 'scythe') {
+        this.rightArm.rotation.x = weapon === 'scythe' ? -0.8 : -1.45;
+        this.leftArm.rotation.set(-1.1, 0.5, 0.08);
+      }
+      if (weapon === 'razor') { this.body.position.y -= 0.08; this.leftArm.rotation.x = -1.1; this.rightArm.rotation.x = -0.9; }
+    }
 
     switch (actor.state) {
       case 'jump':

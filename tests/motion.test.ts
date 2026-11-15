@@ -30,7 +30,7 @@ describe('combat motion', () => {
 
   it('returns smoothly to a neutral pose with finite directional aerials', () => {
     for (const direction of ['neutral', 'forward', 'back', 'up', 'down'] as const) {
-      for (const weapon of ['arc', 'pile', 'razor'] as const) {
+      for (const weapon of ['arc', 'pile', 'razor', 'lance', 'cannon', 'scythe'] as const) {
         for (const elapsed of [0, 0.149, 0.15, 0.2, 0.3, 0.499, 0.5]) {
           const pose = attackMotion({ ...attack, kind: 'aerial', direction, elapsed }, weapon);
           for (const value of Object.values(pose)) if (typeof value === 'number') expect(Number.isFinite(value)).toBe(true);

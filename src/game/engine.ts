@@ -20,6 +20,7 @@ interface Strike {
   hit: Set<string>;
   radial: boolean;
   projectile: boolean;
+  tip: boolean;
   fired: boolean;
   source: string;
 }
@@ -51,6 +52,7 @@ interface ActorMemory {
 }
 
 interface ProjectileMemory {
+  kind: AttackKind;
   damage: number;
   force: number;
   growth: number;
@@ -412,11 +414,24 @@ export class GameEngine {
     if (w.loadout.weapon === 'arc') range *= 1.18;
     if (w.loadout.weapon === 'pile') { duration *= 1.13; windup *= 1.3; force *= 1.1; }
     if (w.loadout.weapon === 'razor') { duration *= 0.78; windup *= 0.7; }
-    const name = kind === 'jab' ? `JAB ${m.comboStage + 1}` : `${direction.toUpperCase()} ${kind === 'aerial' ? 'AIR' : kind.toUpperCase()}`;
+    const weapon = w.loadout.weapon;
+    let depth = direction === 'down' && kind === 'smash' ? 2.2 : 1.35;
+    let radial = (kind === 'aerial' && direction === 'neutral') || (kind === 'smash' && direction === 'down');
+    const cannonShot = weapon === 'cannon' && direction !== 'up' && direction !== 'down' && kind !== 'dash';
+    if (weapon === 'lance') {
+      range *= 2; depth = 0.55; duration *= 1.3; windup *= 1.5; radial = false;
+    } else if (weapon === 'scythe') {
+      range *= 1.45; depth = 2.5; radial = true; force *= 0.72; duration *= 1.35; windup *= 1.7;
+    } else if (weapon === 'cannon') {
+      duration = kind === 'smash' ? 1.05 : 0.66; windup = kind === 'smash' ? 0.27 : 0.18;
+      if (cannonShot) { range = kind === 'smash' ? 12 : 9; radial = false; damage *= 1.3; }
+    }
+    const baseName = kind === 'jab' ? `JAB ${m.comboStage + 1}` : `${direction.toUpperCase()} ${kind === 'aerial' ? 'AIR' : kind.toUpperCase()}`;
+    const name = weapon === 'lance' ? `LANCE / ${baseName}` : weapon === 'scythe' ? `ORBIT / ${baseName}` : weapon === 'cannon' ? `${cannonShot ? 'CANNON SHOT' : 'CANNON BASH'} / ${baseName}` : baseName;
     this.beginAttack(p, kind, direction, name, duration, range, charge, {
       damage: damage * w.loadout.power, force: force * w.loadout.power, growth: growth * w.loadout.power, angle,
-      activeStart: windup, activeEnd: windup + (kind === 'smash' ? 0.17 : 0.13), depth: direction === 'down' && kind === 'smash' ? 2.2 : 1.35,
-      height: direction === 'up' ? 3.5 : 1.85, radial: (kind === 'aerial' && direction === 'neutral') || (kind === 'smash' && direction === 'down'),
+      activeStart: windup, activeEnd: Math.min(duration - 0.04, windup + (kind === 'smash' ? 0.17 : 0.13)), depth,
+      height: direction === 'up' ? 3.5 : 1.85, radial, projectile: cannonShot, tip: weapon === 'lance',
     });
     w.lastMove = name;
     if (kind === 'smash') w.events.push({ type: 'smash', intensity: charge });
@@ -433,7 +448,7 @@ export class GameEngine {
     m.actionTimer = duration;
     m.strike = {
       damage: 8, force: 6, growth: 0.065, angle: 0.55, depth: 1.2, height: 1.9,
-      activeStart: 0.2, activeEnd: 0.35, hit: new Set(), radial: false, projectile: false, fired: false,
+      activeStart: 0.2, activeEnd: 0.35, hit: new Set(), radial: false, projectile: false, tip: false, fired: false,
       source: actor.id, ...options,
     };
     actor.attack = { name, kind, direction, elapsed: 0, duration, range, charge,
@@ -510,7 +525,9 @@ export class GameEngine {
       if (xHits && Math.abs(dz) < strike.depth + target.scale * 0.3 && heightHits) {
         strike.hit.add(target.id);
         const hitFacing = strike.radial ? (dx >= 0 ? 1 : -1) : facing;
-        this.hit(target, actor, strike.damage, strike.force, strike.growth, strike.angle, hitFacing as 1 | -1, attack.kind);
+        const tip = strike.tip && Math.abs(dx) >= attack.range * 0.7 ? 1.35 : 1;
+        this.hit(target, actor, strike.damage * tip, strike.force * tip, strike.growth, strike.angle, hitFacing as 1 | -1, attack.kind);
+        if (tip > 1) this.effect('text', target.x, target.y + 2.3, target.z, 0.5, 1, 0x79cfff, 'TIP HIT');
       }
     }
   }
@@ -710,6 +727,18 @@ export class GameEngine {
 
   private fireAttack(actor: Actor, strike: Strike): void {
     const w = this.world;
+    if (actor.kind === 'player' && actor.attack?.name.startsWith('CANNON SHOT')) {
+      const facing = actor.attack.direction === 'back' ? -actor.facing : actor.facing;
+      const speed = 14, charged = actor.attack.kind === 'smash';
+      const shot: Projectile = { id: `shot-${this.serial++}`, kind: 'bolt', ownerId: actor.id,
+        x: actor.x + facing * 0.7, y: actor.y + 1, z: actor.z,
+        vx: facing * speed, vy: 0, vz: 0, radius: charged ? 0.38 : 0.22,
+        life: actor.attack.range / speed, color: w.loadout.color };
+      w.projectiles.push(shot);
+      this.shots.set(shot.id, { kind: actor.attack.kind, damage: strike.damage, force: strike.force, growth: strike.growth, facing: facing as 1 | -1 });
+      this.effect('hit', shot.x, shot.y, shot.z, 0.18, charged ? 1 : 0.5, w.loadout.color);
+      return;
+    }
     const target = actor.kind === 'player' ? w.enemies.filter((e) => e.alive && (e.x - actor.x) * actor.facing > 0).sort((a, b) => Math.abs(a.z - actor.z) - Math.abs(b.z - actor.z))[0] : actor.aim;
     if (actor.kind === 'artillery' && target) {
       const travel = 1.15, y = actor.y + 2;
@@ -720,7 +749,7 @@ export class GameEngine {
         target: { x: target.x, z: target.z }, radius: 0.3, life: 2, color: 0xffcf65,
       };
       w.projectiles.push(shot);
-      this.shots.set(shot.id, { damage: strike.damage, force: strike.force, growth: strike.growth, facing: actor.facing });
+      this.shots.set(shot.id, { kind: 'enemy', damage: strike.damage, force: strike.force, growth: strike.growth, facing: actor.facing });
       return;
     }
     const count = actor.kind === 'boss' ? 3 : 1;
@@ -741,7 +770,7 @@ export class GameEngine {
         color: actor.kind === 'player' ? w.loadout.color : 0xff6b56,
       };
       w.projectiles.push(projectile);
-      this.shots.set(projectile.id, { damage: strike.damage, force: strike.force, growth: strike.growth, facing: actor.facing });
+      this.shots.set(projectile.id, { kind: actor.attack?.kind ?? 'special', damage: strike.damage, force: strike.force, growth: strike.growth, facing: actor.facing });
     }
   }
 
@@ -778,7 +807,7 @@ export class GameEngine {
         if (!target.alive || target.invulnerable > 0 || shot.life <= 0) continue;
         if (Math.abs(shot.x - target.x) < 0.55 * target.scale + shot.radius && Math.abs(shot.z - target.z) < 0.5 * target.scale + shot.radius && shot.y > target.y - 0.1 && shot.y < target.y + 1.85 * target.scale) {
           const data = this.shots.get(shot.id);
-          if (data) this.hit(target, source, data.damage, data.force, data.growth, 0.45, data.facing, 'special', shot);
+          if (data) this.hit(target, source, data.damage, data.force, data.growth, 0.45, data.facing, data.kind, shot);
           shot.life = 0;
         }
       }
