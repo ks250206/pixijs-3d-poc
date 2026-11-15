@@ -68,7 +68,7 @@ describe('playable fighting styles', () => {
   it('uses a different thrust, recoil, and spinning motion for the new weapons', () => {
     const game = arena('arc'); jab(game);
     const attack = { ...game.world.player.attack!, elapsed: 0.12 };
-    const poses = ['arc', 'pile', 'razor', 'lance', 'cannon', 'scythe'].map((id) => attackMotion(attack, id as WeaponId));
+    const poses = ['arc', 'pile', 'razor', 'lance', 'cannon', 'scythe'].map((id) => attackMotion({ ...attack, move: attack.move ? { ...attack.move, pose: id as WeaponId } : undefined }, id as WeaponId));
     expect(new Set(poses.map((p) => JSON.stringify(p))).size).toBe(6);
     expect(poses[4]!.trail).toBe(false);
   });

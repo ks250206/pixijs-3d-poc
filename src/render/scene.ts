@@ -1,3 +1,5 @@
+import { sampleWeapon, bodyHurtbox } from '../game/combat/geometry';
+import { placeSegment, worldMatrix } from './weapon';
 import { Application, Container, Graphics, RendererType, Text, Texture } from 'pixi.js';
 import type { WebGLRenderer } from 'pixi.js';
 import {
@@ -13,6 +15,7 @@ import {
   PointLight,
   SphereGeometry,
   TorusGeometry,
+  Vector3,
   View3D,
 } from '@pixi/3d';
 import { ENEMY_NAMES, type Actor, type ActorKind, type ArenaProp, type Effect, type Projectile, type WorldState } from '../game/types';
@@ -80,6 +83,9 @@ export class GameScene {
   private readonly stars = new Graphics();
   private readonly scenery = new Container3D();
   private readonly stageDecor = new Container3D();
+  private debugHitboxes = false;
+  private readonly combatDebug: Mesh3D[] = [];
+  private readonly debugSegments = new Map<string, Mesh3D>();
   private readonly actors = new Map<string, ActorView>();
   private readonly effects = new Map<string, EffectView>();
   private readonly hazards = new Map<string, { root: Container3D; fill: Mesh3D; progress: Mesh3D; label: Text }>();
@@ -445,6 +451,10 @@ export class GameScene {
     reactorLight.position.set(1.15, 3, -3);
     g.addChild(reactorLight);
 
+    for (const z of [-4.3, 4.3]) {
+      this.box(g, steel, 0, 0.25, z, ARENA_HALF_WIDTH * 2, 0.16, 0.12);
+      this.box(g, cyan, 0, 0.42, z, ARENA_HALF_WIDTH * 2, 0.045, 0.07);
+    }
     this.sign(g, 'NULL // SYSTEMS', 'AUTONOMOUS FOUNDRY    /    LINE 07', -6.8, 4.5, -6.6, 7, '#86f4de');
     this.sign(g, 'CONTROL IS AN ILLUSION', 'THE NETWORK REMEMBERS EVERYTHING', 6.8, 4.8, -7.2, 7.3, '#e9bb6a');
 
@@ -489,7 +499,11 @@ export class GameScene {
     const glow = this.glow(color);
     const movers: Container3D[] = [];
     let indicator: Mesh3D;
-    if (prop.kind === 'crate') {
+    if (prop.kind === 'relay' || prop.kind === 'node') {
+      this.box(root, steel, 0, .75, 0, .7, 1.5, .7);
+      indicator = this.box(root, glow, 0, 1.5, 0, .9, .2, .9);
+      this.box(root, glow, 0, 1.2, .38, .15, .35, .05);
+    } else if (prop.kind === 'crate') {
       this.box(root, dark, 0, 0.5, 0, 1.1, 1, 1.1);
       for (const x of [-0.46, 0.46]) this.box(root, steel, x, 0.5, 0, 0.14, 1.07, 1.16);
       this.box(root, steel, 0, 1.03, 0, 1.1, 0.1, 1.1);
@@ -601,7 +615,7 @@ export class GameScene {
       const point = this.view.worldToScreen({ x: prop.x, y: prop.height + 0.5, z: prop.z });
       entry.label.visible = prop.alive && point !== null && world.phase !== 'ready';
       if (point) entry.label.position.copyFrom(point);
-      const title = prop.kind === 'crate' ? `REPAIR BOX / ${Math.ceil(prop.hp)}` : prop.kind === 'barrel' ? '⚠ EXPLOSIVE' : prop.kind === 'repair' ? 'REPAIR −25%' : prop.kind === 'conveyor' ? (prop.direction > 0 ? 'CONVEYOR →' : '← CONVEYOR') : prop.phase === 'warning' ? `⚠ HEAT / ${Math.max(0, 5 - prop.timer).toFixed(1)}s` : prop.phase === 'active' ? '▲ HEAT ▲' : 'VENT';
+      const title = prop.kind === 'relay' || prop.kind === 'node' ? `${prop.kind === 'relay' ? '◆ RELAY' : '◆ GATE NODE'} / ${Math.ceil(prop.hp)} HP` : prop.kind === 'crate' ? `REPAIR BOX / ${Math.ceil(prop.hp)}` : prop.kind === 'barrel' ? '⚠ EXPLOSIVE' : prop.kind === 'repair' ? 'REPAIR −25%' : prop.kind === 'conveyor' ? (prop.direction > 0 ? 'CONVEYOR →' : '← CONVEYOR') : prop.phase === 'warning' ? `⚠ HEAT / ${Math.max(0, 5 - prop.timer).toFixed(1)}s` : prop.phase === 'active' ? '▲ HEAT ▲' : 'VENT';
       if (entry.label.text !== title) entry.label.text = title;
       if (prop.kind === 'vent') {
         entry.indicator.material = prop.phase === 'idle' ? this.assets.trim : this.glow(0xff654d);
@@ -665,6 +679,7 @@ export class GameScene {
   private makeActor(actor: Actor): ActorView {
     const robot = new RobotView(actor.kind, this.assets);
     this.view.root.addChild(robot.shadow, robot.root);
+    if (robot.weaponView) this.view.root.addChild(robot.weaponView.root);
     const label = new Text({
       text: '0%',
       style: {
@@ -679,8 +694,8 @@ export class GameScene {
     });
     label.anchor.set(0.5, 1);
     this.labels.addChild(label);
-    const slash = this.mesh(this.view.root, this.slashGeometry, this.assets.glow[actor.kind], 0, 0, 0);
-    const slashEdge = this.mesh(this.view.root, this.slashGeometry, this.assets.flash, 0, 0, 0);
+    const slash = this.mesh(this.view.root, actor.kind === 'player' ? this.cube : this.slashGeometry, actor.kind === 'player' ? this.material(0x79cfff, .4, 0, .16) : this.assets.glow[actor.kind], 0, 0, 0);
+    const slashEdge = this.mesh(this.view.root, actor.kind === 'player' ? this.cube : this.slashGeometry, actor.kind === 'player' ? this.material(0xffffff, .4, 0, .08) : this.assets.flash, 0, 0, 0);
     slash.visible = slashEdge.visible = false;
     const charge = this.mesh(this.view.root, this.ring, this.assets.glow[actor.kind], 0, 0, 0);
     charge.visible = false;
@@ -691,6 +706,49 @@ export class GameScene {
     return view;
   }
 
+  toggleHitboxes(): boolean { this.debugHitboxes = !this.debugHitboxes; return this.debugHitboxes; }
+
+  weaponTip(actorId: string): { x: number; y: number; z: number } | null {
+    return this.actors.get(actorId)?.robot.weaponView?.tipWorld() ?? null;
+  }
+
+  combatGeometry(actorId: string) {
+    const endpoints = (mesh: Mesh3D | undefined) => {
+      if (!mesh?.visible) return null;
+      const matrix = worldMatrix(mesh);
+      const a = new Vector3(0, -.5, 0).applyMatrix4(matrix), b = new Vector3(0, .5, 0).applyMatrix4(matrix);
+      return { a: { x: a.x, y: a.y, z: a.z }, b: { x: b.x, y: b.y, z: b.z } };
+    };
+    return { tip: this.weaponTip(actorId), trail: endpoints(this.actors.get(actorId)?.slash), overlay: endpoints(this.debugSegments.get(actorId)) };
+  }
+
+  private updateCombatDebug(world: WorldState): void {
+    let index = 0;
+    this.debugSegments.clear();
+    const mesh = () => {
+      let item = this.combatDebug[index++];
+      if (!item) { item = new Mesh3D({ geometry: this.cube, material: this.material(0x67ffbb, .4, 0, .18), castShadow: false }); this.view.root.addChild(item); this.combatDebug.push(item); }
+      item.visible = true; return item;
+    };
+    if (this.debugHitboxes && world.mode === 'training') for (const actor of [world.player, ...world.enemies]) {
+      if (!actor.alive) continue;
+      const box = bodyHurtbox(actor), b = mesh();
+      b.rotation.set(0, 0, 0); b.position.set(actor.x, (box.min.y + box.max.y) / 2, actor.z);
+      b.scale.set(0.035, box.max.y - box.min.y, box.max.z - box.min.z);
+      if (actor.attack?.move && actor.state === 'attack') {
+        const move = actor.attack.move, frame = actor.attack.elapsed * 60;
+        if (actor.attack.collision?.active) {
+          const c = actor.attack.collision?.capsule ?? sampleWeapon(actor, move, frame), line = mesh(); placeSegment(line, c);
+          line.position.set((c.a.x + c.b.x) / 2, (c.a.y + c.b.y) / 2, (c.a.z + c.b.z) / 2);
+          this.debugSegments.set(actor.id, line);
+          line.scale.x = line.scale.z = c.radius * 2;
+          for (const p of [c.a, c.b]) { const end = mesh(); end.position.copyFrom(p); end.rotation.set(0, 0, 0); end.scale.set(c.radius * 2); }
+        }
+      }
+    }
+    for (; index < this.combatDebug.length; index++) this.combatDebug[index]!.visible = false;
+  }
+
   private updateActor(actor: Actor, world: WorldState): void {
     const view = this.actors.get(actor.id) ?? this.makeActor(actor);
     view.robot.update(actor, world.time, world.loadout.weapon);
@@ -698,7 +756,7 @@ export class GameScene {
     const point = this.view.worldToScreen({ x: actor.x, y: actor.y + actor.scale * (actor.kind === 'drone' ? 1.6 : boss ? 2.45 : 2.3), z: actor.z });
     view.label.visible = actor.alive && point !== null && world.phase !== 'ready';
     if (point) view.label.position.copyFrom(point);
-    const labelText = `${actor.kind === 'minion' ? '' : `${ENEMY_NAMES[actor.kind]}  `}${Math.round(actor.damage)}%${actor.guard > 0 ? `\n▰ GUARD ${Math.ceil(actor.guard)}` : actor.mount > 0 ? `\n▰ MOUNT ${Math.ceil(actor.mount)}` : ''}`;
+    const labelText = `${actor.bossPhase === 'overdrive' ? '⚡ OVERDRIVE / ' : actor.bossPhase === 'transition' ? '⚡ BOOT / ' : ''}${actor.kind === 'minion' ? '' : `${ENEMY_NAMES[actor.kind]}${actor.tactic ? ` [${actor.tactic}]` : ''}  `}${Math.round(actor.damage)}%${actor.guard > 0 ? `\n▰ GUARD ${Math.ceil(actor.guard)}` : actor.mount > 0 ? `\n▰ MOUNT ${Math.ceil(actor.mount)}` : ''}`;
     if (view.label.text !== labelText) view.label.text = labelText;
     view.label.style.fill = actor.damage > 110 ? 0xff695f : actor.damage > 65 ? 0xffc27b : COLORS[actor.kind];
 
@@ -718,13 +776,20 @@ export class GameScene {
           slash.scale.set(scale * facing, 0.16, 1);
           slash.rotation.set(0, attack.direction === 'back' ? Math.PI : 0, 0);
         }
+        if (actor.kind === 'player' && attack.move) {
+          const capsule = attack.collision?.capsule ?? sampleWeapon(actor, attack.move, attack.elapsed * 60);
+          placeSegment(slash, capsule);
+          slash.position.set((capsule.a.x + capsule.b.x) / 2, (capsule.a.y + capsule.b.y) / 2, (capsule.a.z + capsule.b.z) / 2);
+          slash.scale.x = capsule.radius * (i ? 1.8 : 2);
+          slash.scale.z = capsule.radius;
+        }
         slash.visible = slash.visible && motion.trail;
       }
     }
-    view.danger.visible = actor.alive && actor.kind !== 'player' && actor.telegraph > 0 && actor.state === 'attack' && !attack?.name.startsWith('GRID /');
+    view.danger.visible = actor.alive && actor.kind !== 'player' && actor.telegraph > 0 && actor.state === 'attack' && attack?.move?.behavior !== 'area';
     if (view.danger.visible && attack) {
-      const ranged = attack.name.includes('SHOT') || attack.name.includes('LASER');
-      const rush = attack.name === 'RAIL CHARGE' || attack.name === 'SHOCK DIVE' || attack.name === 'RIDER PASS';
+      const ranged = ['projectile', 'cannon'].includes(attack.move?.behavior ?? '');
+      const rush = attack.move?.behavior === 'rush';
       const radial = attack.direction === 'down';
       const length = ranged ? 13 : rush ? 7.5 : radial ? attack.range * 2 : attack.range;
       const angle = ranged && actor.aim ? Math.atan2(actor.aim.z - actor.z, actor.aim.x - actor.x) : actor.facing > 0 ? 0 : Math.PI;
@@ -732,8 +797,8 @@ export class GameScene {
       view.danger.position.set(actor.x + (radial ? 0 : Math.cos(angle) * length / 2), 0.045, actor.z + (radial ? 0 : Math.sin(angle) * length / 2));
       view.danger.scale.set(length, 0.015, width);
       view.danger.rotation.y = -angle;
-      if ((attack.name === 'MORTAR SALVO' || attack.name === 'LEAP STRIKE') && actor.aim) {
-        const radius = attack.name === 'MORTAR SALVO' ? 2.1 : 1.5;
+      if ((attack.move?.behavior === 'mortar' || attack.move?.behavior === 'leap') && actor.aim) {
+        const radius = attack.move?.behavior === 'mortar' ? 2.1 : 1.5;
         view.danger.position.set(actor.aim.x, 0.045, actor.aim.z);
         view.danger.scale.set(radius * 2, 0.015, radius * 2);
         view.danger.rotation.y = 0;
@@ -863,6 +928,7 @@ export class GameScene {
 
   update(world: WorldState, dt: number): void {
     if (this.destroyed) return;
+    this.updateCombatDebug(world);
     if (this.playerColor !== world.loadout.color) {
       this.playerColor = world.loadout.color;
       this.assets.glow.player.baseColor = this.playerColor;
@@ -952,6 +1018,8 @@ export class GameScene {
       rootVisible: this.view.root.visible,
       rootWorldVisible: Boolean(this.view.root.worldVisible),
       meshCount: meshes.length,
+      actorViewCount: this.actors.size,
+      weaponRootCount: this.view.root.children.filter(c => c.label === 'combat-weapon').length,
       activeMeshCount: meshes.filter((mesh) => mesh.worldVisible).length,
       appResolution: renderer.resolution,
       viewResolution: this.view.resolution,

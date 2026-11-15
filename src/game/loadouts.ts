@@ -76,6 +76,18 @@ export function createCandidates(seed: number): Loadout[] {
       weapon, special, trait, color: stats.color,
       power, speed, weight,
       description: traitDescription[trait],
+      modules: { weapon: random() < 0.5 ? 'quick' : 'breaker', neutral: random() < 0.5 ? 'focused' : 'split', side: random() < 0.5 ? 'cross' : 'push', down: random() < 0.5 ? 'launch' : 'stagger' },
     };
   });
+}
+
+export function moduleGuide(loadout: Loadout): { slot: string; name: string; effect: string }[] {
+  const split = loadout.modules.neutral === 'split';
+  return [
+    { slot: 'J', name: loadout.modules.weapon === 'quick' ? 'QUICK' : 'BREAKER', effect: loadout.modules.weapon === 'quick' ? '始動短縮・威力90%' : '始動+2F・威力112%' },
+    { slot: 'L', name: loadout.special === 'pulse' ? split ? 'ION SPREAD' : 'ION PIERCE' : loadout.special === 'blink' ? split ? 'PHASE FAN' : 'PHASE SHIFT' : split ? 'GRAVITY FIELD' : 'GRAVITY WELL', effect: loadout.special === 'pulse' ? split ? '3方向弾' : '2体貫通弾' : loadout.special === 'blink' ? split ? '広い回転突進' : '高速直線突進' : split ? '広域吸引・弱打' : '集中吸引・強打' },
+    { slot: '横L', name: loadout.modules.side === 'cross' ? 'PHASE CROSS' : 'PHASE PUSH', effect: loadout.modules.side === 'cross' ? '高速突進・長い無敵' : '短い突進・強い押し出し' },
+    { slot: '上L', name: 'RISING CIRCUIT', effect: '全機共通・着地まで1回の上昇復帰' },
+    { slot: '下L', name: loadout.modules.down === 'launch' ? 'EMP LAUNCH' : 'EMP STAGGER', effect: loadout.modules.down === 'launch' ? '上へ打ち上げ' : '低く短くのけぞらせる' },
+  ];
 }

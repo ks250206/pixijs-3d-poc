@@ -73,6 +73,7 @@ async function main() {
     resume: () => { engine.resume(); input.releaseAll(); pending = { ...EMPTY_INPUT }; if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); },
     restart: () => { input.releaseAll(); pending = { ...EMPTY_INPUT }; engine.restart(); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); },
     newRun,
+    toggleHitboxes: () => scene.toggleHitboxes(),
     toggleAudio: () => { audio.unlock(); return audio.toggle(); },
     fullscreen: () => {
       if (document.fullscreenElement) void document.exitFullscreen();

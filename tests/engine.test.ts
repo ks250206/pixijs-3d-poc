@@ -1,8 +1,9 @@
+import { runCampaignInputs } from './helpers/play';
+import { playerMove } from '../src/game/combat/moves';
 import { describe, expect, it } from 'vite-plus/test';
 import { ARENA_HALF_WIDTH, SECTOR_SPAN, STAGES } from '../src/game/campaign';
 import { GameEngine } from '../src/game/engine';
 import { createCandidates } from '../src/game/loadouts';
-import { insideHazard } from '../src/game/patterns';
 import { EMPTY_INPUT, type InputFrame } from '../src/game/types';
 
 const frame = (input: Partial<InputFrame> = {}): InputFrame => ({ ...EMPTY_INPUT, ...input });
@@ -45,7 +46,7 @@ describe('combat and blast zones', () => {
     const target = game.world.enemies[0]!;
     game.update(1 / 60, frame({ attack: true, attackHeld: true }));
     step(game, 12, { attackHeld: true });
-    expect(target.damage).toBeCloseTo(5 * game.world.loadout.power);
+    expect(target.damage).toBeCloseTo(playerMove(game.world.loadout, 'jab', 'neutral', 0, 0).damage);
     expect(target.alive).toBe(true);
     target.damage = 900;
     target.vx = 0; target.vy = 0; target.vz = 0;
@@ -239,6 +240,7 @@ describe('campaign', () => {
       for (const enemy of game.world.enemies) enemy.x = game.world.arenaMax + 6;
       step(game, 90);
     }
+    runCampaignInputs(game, 3600, () => game.world.phase === 'sector-clear');
     expect(game.world.phase).toBe('sector-clear');
     game.nextSector();
     expect(game.world.sector).toBe(1);
@@ -255,6 +257,7 @@ describe('campaign', () => {
         for (const enemy of game.world.enemies) enemy.x = game.world.arenaMax + 6;
         step(game, 90);
       }
+      runCampaignInputs(game, 3600, () => game.world.phase === 'sector-clear');
       game.nextSector();
     }
     for (let wave = 0; wave < STAGES.at(-1)!.waves.length - 1; wave++) {
@@ -298,67 +301,8 @@ describe('campaign', () => {
   it('can complete the full campaign using only ordinary control inputs', () => {
     const game = new GameEngine(73);
     game.start(createCandidates(73).find((choice) => choice.weapon === 'pile')!);
-    let lastAction = -99;
-    let nextDodge = 0;
-    // This player has no world writes, damage overrides, teleports or invincibility.
-    // It builds damage with quick strikes before charging finishers, jumps telegraphed attacks and
-    // uses aerials/recovery and visible floor warnings. Supplies use the same
-    // public action as the map buttons; combat still uses ordinary input frames.
-    for (let tick = 0; tick < 60 * 600; tick++) {
-      const w = game.world, p = w.player;
-      if (w.phase === 'won' || w.phase === 'lost') break;
-      const input = frame();
-      if (w.phase === 'sector-clear') { game.claimSupply(w.stocks < 3 ? 'stock' : 'repair'); input.moveX = 1; }
-      else if (p.alive) {
-        const targets = w.enemies.filter((enemy) => enemy.alive).sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z));
-        const target = targets[0];
-        if (target) {
-          const dx = target.x - p.x, dz = target.z - p.z;
-          const outside = p.x < w.arenaMin || p.x > w.arenaMax;
-          if (outside && p.y < 2 && w.specialCooldown <= 0) {
-            input.moveZ = -1; input.moveX = Math.sign((w.arenaMin + w.arenaMax) / 2 - p.x); input.special = true;
-          } else if (p.state === 'charge') input.smashHeld = (p.attack?.charge ?? 0) < 0.6 && !w.hazards.some(h => !h.hit && insideHazard(h, p.x, p.z));
-          else if (p.state === 'hurt') input.moveX = Math.sign((w.arenaMin + w.arenaMax) / 2 - p.x);
-          else {
-            input.moveX = Math.abs(dx) > 2.1 ? Math.sign(dx) : 0;
-            input.moveZ = Math.abs(dz) > 0.6 ? Math.sign(dz) : 0;
-            const canAct = ['idle', 'run', 'jump', 'fall', 'wavedash'].includes(p.state);
-            const danger = w.hazards.filter(h => !h.hit && h.delay - h.elapsed < 1.2);
-            if (canAct && danger.some(h => insideHazard(h, p.x, p.z))) {
-              const safe = [] as { x: number; z: number; distance: number }[];
-              for (let x = w.arenaMin + 2; x <= w.arenaMax - 2; x += 1.5) for (const z of [-3.4, -1.5, 0, 1.5, 3.4]) {
-                if (danger.every(h => !insideHazard({ ...h, width: h.width + 0.7, depth: h.depth + 0.7 }, x, z))) safe.push({ x, z, distance: Math.hypot(x - p.x, (z - p.z) * 1.3) });
-              }
-              safe.sort((a, b) => a.distance - b.distance);
-              if (safe[0]) {
-                input.moveX = Math.abs(safe[0].x - p.x) > 0.2 ? Math.sign(safe[0].x - p.x) : 0;
-                input.moveZ = Math.abs(safe[0].z - p.z) > 0.2 ? Math.sign(safe[0].z - p.z) : 0;
-                if (danger.some(h => insideHazard(h, p.x, p.z) && h.delay - h.elapsed < 0.25)) input.dodge = true;
-                game.update(1 / 60, input); continue;
-              }
-            }
-            const threat = targets.find((enemy) => enemy.attack && enemy.telegraph > 0 && enemy.telegraph < 0.4 && Math.abs(enemy.x - p.x) < (enemy.kind === 'boss' ? 6 : 3) && Math.abs(enemy.z - p.z) < 2.7);
-            if (canAct && threat && tick > nextDodge && p.y <= 0.1) {
-              input.jump = true; input.jumpHeld = true; nextDodge = tick + 30;
-            } else if (canAct && p.y <= 0.1 && w.specialCooldown <= 0 && targets.filter(e => Math.hypot(e.x - p.x, e.z - p.z) < 3.4).length >= 3) {
-              input.moveX = 0; input.moveZ = 1; input.special = true;
-            } else if (canAct && p.y > 0.1 && Math.hypot(dx, dz) < 2.5 && Math.abs(dz) < 1) {
-              input.attack = true; input.moveX = Math.sign(dx); input.moveZ = 0; lastAction = tick;
-            } else if (canAct && Math.abs(dx) < 2.4 && Math.abs(dz) < 0.8 && tick - lastAction > 10) {
-              if (p.facing !== Math.sign(dx) && Math.abs(dx) > 0.2) input.moveX = Math.sign(dx);
-              else if (target.damage < 50 && target.armor <= 0 && target.guard <= 0) {
-                input.moveX = Math.sign(dx); input.moveZ = 0; input.attack = true; lastAction = tick;
-              } else {
-                input.moveX = 0; input.moveZ = 0; input.smash = true; input.smashHeld = true; lastAction = tick;
-              }
-            } else if (canAct && Math.abs(dx) > 4 && Math.abs(dx) < 8 && Math.abs(dz) < 1 && w.specialCooldown <= 0 && w.loadout.special === 'pulse') {
-              input.moveZ = 0; input.special = true; lastAction = tick;
-            }
-          }
-        }
-      }
-      game.update(1 / 60, input);
-    }
+    const objectives = runCampaignInputs(game, 60 * 900);
+    expect(objectives).toEqual([0, 2, 5]);
     expect(game.world.phase, JSON.stringify({ sector: game.world.sector, wave: game.world.wave, kills: game.world.kills, damage: game.world.player.damage })).toBe('won');
     expect(game.world.kills).toBeGreaterThanOrEqual(STAGES.flatMap((stage) => stage.waves.flatMap((wave) => wave.enemies)).length);
     expect(game.world.sector).toBe(STAGES.length - 1);
@@ -376,6 +320,7 @@ describe('enemy tactics', () => {
         for (const enemy of game.world.enemies) { kinds.add(enemy.kind); enemy.x = game.world.arenaMax + 6; }
         step(game, 90);
       }
+      runCampaignInputs(game, 3600, () => game.world.phase === 'sector-clear');
       game.nextSector();
     }
     expect(kinds.has('sentinel')).toBe(true);
@@ -511,7 +456,7 @@ describe('interactive arena', () => {
     game.world.player.x = crate.x - 1.3; game.world.player.z = crate.z;
     const hp = crate.hp;
     game.update(1 / 60, frame({ attack: true })); step(game, 25);
-    expect(crate.hp).toBeCloseTo(hp - 5 * game.world.loadout.power);
+    expect(crate.hp).toBeCloseTo(hp - playerMove(game.world.loadout, 'jab', 'neutral', 0, 0).damage);
     game.update(1 / 60, frame({ smash: true })); step(game, 45);
     expect(crate.alive).toBe(false);
     const repair = game.world.props.find((prop) => prop.kind === 'repair')!;
