@@ -74,6 +74,22 @@ test('compatibility mode renders the arena without floating-point environment li
   await expectRenderedArena(page);
 });
 
+test('shows a clear requirement when the browser has no GPU rendering backend', async ({ page }) => {
+  await page.addInitScript(() => {
+    const original = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string, options?: unknown) {
+      if (['webgl', 'webgl2', 'experimental-webgl'].includes(type)) return null;
+      return Reflect.apply(original, this, [type, options]);
+    } as typeof original;
+    Object.defineProperty(navigator, 'gpu', { value: undefined, configurable: true });
+  });
+  await page.goto('./?seed=73');
+  await expect(page.locator('#boot')).toHaveClass(/boot-error/);
+  await expect(page.locator('#boot-detail')).toContainText('Canvas 2D');
+  await expect(page.locator('#boot-detail')).toContainText('WebGL 2');
+  await expect(page.locator('[data-action=start]')).toHaveCount(0);
+});
+
 test('keyboard movement, jumping, charging, pausing and recovery work in the rendered game', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));

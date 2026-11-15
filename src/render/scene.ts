@@ -181,6 +181,12 @@ export class GameScene {
       autoStart: false,
       powerPreference: 'high-performance',
     });
+    // Pixi can fall back to Canvas even with preference: 'webgl'. Canvas renders
+    // the 2D labels but cannot render View3D, so reject that fallback early.
+    if (app.renderer.type !== RendererType.WEBGL && app.renderer.type !== RendererType.WEBGPU) {
+      app.destroy(true, { children: true });
+      throw new Error('この環境はCanvas 2D描画のみ利用できます。このデモにはWebGL 2またはWebGPUが必要です。');
+    }
     // Pixi itself can fall back to WebGL 1, but @pixi/3d requires WebGL 2.
     if (app.renderer.type === RendererType.WEBGL
       && (app.renderer as WebGLRenderer).context.webGLVersion !== 2) {
