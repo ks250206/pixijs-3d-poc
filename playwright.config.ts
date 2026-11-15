@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const port = Number(process.env.PLAYWRIGHT_PORT ?? 4173);
+const baseURL = `http://127.0.0.1:${port}/pixijs-3d-poc/`;
+
 export default defineConfig({
   testDir: './tests/browser',
   fullyParallel: false,
@@ -10,7 +13,7 @@ export default defineConfig({
   expect: { timeout: process.env.CI ? 30_000 : 10_000 },
   reporter: [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:4173/pixijs-3d-poc/',
+    baseURL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     launchOptions: {
@@ -20,8 +23,8 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } }],
   webServer: {
-    command: 'pnpm preview --host 127.0.0.1 --port 4173',
-    url: 'http://127.0.0.1:4173/pixijs-3d-poc/',
+    command: `pnpm preview --host 127.0.0.1 --port ${port} --strictPort`,
+    url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,
   },

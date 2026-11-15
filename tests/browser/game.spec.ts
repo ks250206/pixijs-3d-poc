@@ -61,9 +61,40 @@ test('boots real 3D, selects randomized chassis, and shows a working combat guid
   await page.locator('.top-actions [data-action=help]').click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await expect(page.getByText('WAVEDASH / 絶', { exact: true })).toBeVisible();
+  await expect(page.getByText('05 / ENEMY TACTICS', { exact: true })).toBeVisible();
+  await expect(page.getByText('06 / ARENA SYSTEMS', { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toBeHidden();
   expect((await snapshot(page)).phase).toBe('ready');
+  expect(errors).toEqual([]);
+});
+
+test('renders specialist enemies and interactive equipment across sector transitions', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await training(page);
+  await expect(page.locator('[data-hud=arenaHint]')).toContainText('危険床は停止');
+  // Controlled fixture: verify new models, arena rebuild and resource cleanup;
+  // ordinary-input campaign completion is covered by the simulation test.
+  await page.evaluate(() => {
+    const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; nextSector: () => void } } }).__UPRISING__.engine;
+    engine.world.phase = 'sector-clear';
+    engine.nextSector();
+    engine.world.enemies[0]!.kind = 'sentinel';
+    engine.world.enemies[0]!.guard = 40;
+    engine.world.enemies[1]!.kind = 'charger';
+  });
+  await expect.poll(async () => (await snapshot(page)).sector).toBe(1);
+  await expectRenderedArena(page);
+  const props = (await snapshot(page)).props;
+  expect(props.filter((prop) => prop.kind === 'conveyor')).toHaveLength(2);
+  await page.screenshot({ path: 'test-results/screenshots/05-transit-specialists.png' });
+  await page.evaluate(() => {
+    const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; restart: () => void } } }).__UPRISING__.engine;
+    engine.restart();
+  });
+  await expect.poll(async () => (await snapshot(page)).sector).toBe(0);
+  await expectRenderedArena(page);
   expect(errors).toEqual([]);
 });
 
@@ -127,7 +158,7 @@ test('keyboard movement, jumping, charging, pausing and recovery work in the ren
 });
 
 test('touch controls work in landscape and menu fits portrait', async ({ browser }) => {
-  const context = await browser.newContext({ baseURL: 'http://127.0.0.1:4173/pixijs-3d-poc/', viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+  const context = await browser.newContext({ baseURL: test.info().project.use.baseURL, viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
   const page = await context.newPage();
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));

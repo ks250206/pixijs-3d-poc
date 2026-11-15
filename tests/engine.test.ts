@@ -341,3 +341,230 @@ describe('campaign', () => {
     expect(game.world.stocks).toBeGreaterThan(0);
   });
 });
+
+describe('enemy tactics', () => {
+  it('introduces shield and rush specialists during the campaign', () => {
+    const game = new GameEngine(73);
+    game.start(createCandidates(73)[0]!);
+    const kinds = new Set<string>();
+    for (let sector = 0; sector < 3; sector++) {
+      for (let wave = 0; wave < 2; wave++) {
+        for (const enemy of game.world.enemies) { kinds.add(enemy.kind); enemy.x = game.world.arenaMax + 6; }
+        step(game, 90);
+      }
+      game.nextSector();
+    }
+    expect(kinds.has('sentinel')).toBe(true);
+    expect(kinds.has('charger')).toBe(true);
+  });
+
+  it('blocks frontal jabs with a shield but leaves the rear vulnerable', () => {
+    const front = training(), rear = training();
+    for (const game of [front, rear]) {
+      const target = game.world.enemies[0]!;
+      target.kind = 'sentinel'; target.guard = 40;
+      target.facing = game === front ? -1 : 1;
+      game.update(1 / 60, frame({ attack: true }));
+      step(game, 10);
+    }
+    expect(front.world.enemies[0]!.damage).toBeLessThan(rear.world.enemies[0]!.damage * 0.3);
+    expect(front.world.enemies[0]!.guard).toBeLessThan(40);
+    expect(rear.world.enemies[0]!.guard).toBe(40);
+  });
+
+  it('breaks a shield with a charged smash and allows grabbing a guarding enemy', () => {
+    const game = training(), target = game.world.enemies[0]!;
+    target.kind = 'sentinel'; target.guard = 40; target.facing = -1;
+    game.update(1 / 60, frame({ smash: true, smashHeld: true }));
+    step(game, 45, { smashHeld: true });
+    game.update(1 / 60, frame());
+    step(game, 14);
+    expect(target.guard).toBe(0);
+    expect(target.damage).toBeGreaterThan(15);
+    const grabGame = training();
+    grabGame.world.enemies[0]!.kind = 'sentinel';
+    grabGame.world.enemies[0]!.guard = 40;
+    grabGame.update(1 / 60, frame({ grab: true }));
+    expect(grabGame.world.enemies[0]!.state).toBe('grabbed');
+  });
+
+  it('blocks a frontal projectile even after its owner changes lanes', () => {
+    const game = training(), target = game.world.enemies[0]!;
+    game.world.loadout = { ...game.world.loadout, special: 'pulse' };
+    target.kind = 'sentinel'; target.guard = 40; target.facing = -1; target.x = 5;
+    game.update(1 / 60, frame({ special: true }));
+    for (let i = 0; i < 30 && !game.world.projectiles.length; i++) step(game, 1);
+    expect(game.world.projectiles.length).toBe(1);
+    game.world.player.z = 3.5;
+    step(game, 25);
+    expect(target.damage).toBeCloseTo(15 * game.world.loadout.power * 0.12);
+    expect(target.guard).toBeCloseTo(40 - 15 * game.world.loadout.power);
+  });
+
+  it('keeps a rear projectile unblocked when its owner moves in front of the shield', () => {
+    const game = training(), target = game.world.enemies[0]!;
+    game.world.loadout = { ...game.world.loadout, special: 'pulse' };
+    target.kind = 'sentinel'; target.guard = 40; target.facing = 1; target.x = 5;
+    game.update(1 / 60, frame({ special: true }));
+    for (let i = 0; i < 30 && !game.world.projectiles.length; i++) step(game, 1);
+    expect(game.world.projectiles.length).toBe(1);
+    game.world.player.x = 8;
+    step(game, 25);
+    expect(target.damage).toBeCloseTo(15 * game.world.loadout.power);
+    expect(target.guard).toBe(40);
+    expect(game.world.combo).toBe(1);
+  });
+
+  it('locks the gunner aim during the warning, allowing a lane dodge', () => {
+    const game = training(), enemy = game.world.enemies[0]!;
+    game.world.enemies = [enemy]; game.world.mode = 'campaign';
+    enemy.kind = 'gunner'; enemy.x = 5; enemy.z = 0;
+    for (let i = 0; i < 180 && !enemy.attack; i++) step(game, 1);
+    expect(enemy.attack?.name).toBe('PULSE SHOT');
+    game.world.player.z = 3.5;
+    for (let i = 0; i < 80 && !game.world.projectiles.length; i++) step(game, 1);
+    expect(game.world.projectiles.length).toBeGreaterThan(0);
+    expect(Math.abs(game.world.projectiles[0]!.vz)).toBeLessThan(0.2);
+  });
+
+  it('telegraphs a charge before rushing along a committed lane', () => {
+    const game = training(), enemy = game.world.enemies[0]!;
+    game.world.enemies = [enemy]; game.world.mode = 'campaign';
+    enemy.kind = 'charger'; enemy.x = 5; enemy.z = 0;
+    for (let i = 0; i < 180 && !enemy.attack; i++) step(game, 1);
+    expect(enemy.attack?.name).toBe('RAIL CHARGE');
+    expect(enemy.telegraph).toBeGreaterThan(0.8);
+    const x = enemy.x;
+    step(game, 18);
+    expect(Math.abs(enemy.x - x)).toBeLessThan(0.2);
+    game.world.player.z = 3.5;
+    for (let i = 0; i < 50 && Math.abs(enemy.vx) < 8; i++) step(game, 1);
+    expect(enemy.vx).toBeLessThan(-8);
+    expect(Math.abs(enemy.vz)).toBeLessThan(0.1);
+  });
+
+  it('separates nearby allies instead of stacking on one position', () => {
+    const game = training();
+    game.world.mode = 'campaign';
+    for (const enemy of game.world.enemies) { enemy.x = 5; enemy.z = 0; enemy.kind = 'scout'; }
+    step(game, 30);
+    const lanes = game.world.enemies.map((enemy) => enemy.z);
+    expect(Math.max(...lanes) - Math.min(...lanes)).toBeGreaterThan(0.4);
+  });
+});
+
+describe('interactive arena', () => {
+  it('uses intact equipment as cover against projectiles', () => {
+    const game = training();
+    const crate = game.world.props.find((prop) => prop.kind === 'crate')!;
+    const gunner = game.world.enemies[0]!;
+    game.world.enemies = [gunner]; game.world.mode = 'campaign';
+    gunner.kind = 'gunner'; gunner.x = crate.x + 4; gunner.z = crate.z;
+    game.world.player.x = crate.x - 2; game.world.player.z = crate.z;
+    step(game, 160);
+    expect(crate.hp).toBeLessThan(12);
+    expect(game.world.player.damage).toBe(0);
+  });
+
+  it('lets a jumper clear equipment while grounded movement is blocked', () => {
+    const game = training();
+    const crate = game.world.props.find((prop) => prop.kind === 'crate')!;
+    const player = game.world.player;
+    player.x = crate.x - 1.5; player.z = crate.z;
+    step(game, 25, { moveX: 1 });
+    expect(player.x).toBeLessThan(crate.x - crate.width / 2);
+    player.y = 3; player.vy = 2;
+    step(game, 24, { moveX: 1 });
+    expect(player.x).toBeGreaterThan(crate.x + crate.width / 2);
+  });
+
+  it('damages a repair crate once per swing and drops one collectible repair', () => {
+    const game = training();
+    expect(game.world.props).toBeDefined();
+    const crate = game.world.props.find((prop) => prop.kind === 'crate')!;
+    expect(crate).toBeDefined();
+    game.world.enemies.forEach((enemy) => { enemy.z = -3.8; });
+    game.world.player.x = crate.x - 1.3; game.world.player.z = crate.z;
+    const hp = crate.hp;
+    game.update(1 / 60, frame({ attack: true })); step(game, 25);
+    expect(crate.hp).toBeCloseTo(hp - 5 * game.world.loadout.power);
+    game.update(1 / 60, frame({ smash: true })); step(game, 45);
+    expect(crate.alive).toBe(false);
+    const repair = game.world.props.find((prop) => prop.kind === 'repair')!;
+    expect(repair).toBeDefined();
+    game.world.player.damage = 50; game.world.player.x = repair.x; game.world.player.z = repair.z;
+    step(game, 1);
+    expect(game.world.player.damage).toBe(25);
+    step(game, 5);
+    expect(game.world.player.damage).toBe(25);
+  });
+
+  it('detonates barrels once and damages nearby fighters on both teams', () => {
+    const game = training();
+    expect(game.world.props).toBeDefined();
+    const barrel = game.world.props.find((prop) => prop.kind === 'barrel')!;
+    const p = game.world.player, enemy = game.world.enemies[0]!;
+    p.x = barrel.x - 1.5; p.z = barrel.z;
+    enemy.x = barrel.x + 1; enemy.z = barrel.z + 1.9;
+    game.update(1 / 60, frame({ smash: true })); step(game, 25);
+    expect(barrel.alive).toBe(false);
+    expect(p.damage).toBeGreaterThan(0);
+    expect(enemy.damage).toBeGreaterThan(0);
+  });
+
+  it('warns before a vent erupts, and jumping avoids floor damage', () => {
+    const game = training();
+    expect(game.world.props).toBeDefined();
+    const vent = game.world.props.find((prop) => prop.kind === 'vent')!;
+    game.world.mode = 'campaign';
+    game.world.enemies.forEach((enemy) => { enemy.x = 9; enemy.z = -3.8; });
+    const p = game.world.player;
+    p.x = vent.x; p.z = vent.z; p.invulnerable = 0;
+    for (let i = 0; i < 600 && vent.phase !== 'warning'; i++) step(game, 1);
+    expect(vent.phase).toBe('warning');
+    expect(p.damage).toBe(0);
+    for (let i = 0; i < 120 && vent.phase !== 'active'; i++) step(game, 1);
+    expect(vent.phase).toBe('active');
+    expect(p.damage).toBeGreaterThan(0);
+    const air = training();
+    const airVent = air.world.props.find((prop) => prop.kind === 'vent')!;
+    air.world.mode = 'campaign';
+    air.world.player.x = airVent.x; air.world.player.z = airVent.z;
+    for (let i = 0; i < 600; i++) {
+      air.world.player.y = 2; air.world.player.vy = 0;
+      step(air, 1);
+      if (airVent.phase === 'active') break;
+    }
+    expect(airVent.phase).toBe('active');
+    expect(air.world.player.damage).toBe(0);
+  });
+
+  it('uses a distinct transit layout with conveyors that only carry grounded fighters', () => {
+    const game = training();
+    expect(game.world.props).toBeDefined();
+    const oldIds = game.world.props.map((prop) => prop.id);
+    game.world.phase = 'sector-clear'; game.nextSector();
+    const belt = game.world.props.find((prop) => prop.kind === 'conveyor')!;
+    expect(belt).toBeDefined();
+    expect(game.world.props.every((prop) => !oldIds.includes(prop.id))).toBe(true);
+    const p = game.world.player;
+    p.x = belt.x; p.z = belt.z; p.y = 0;
+    step(game, 30);
+    expect(Math.abs(p.x - belt.x)).toBeGreaterThan(0.4);
+    p.x = belt.x; p.y = 4; p.vx = 0; p.vy = 0;
+    step(game, 10);
+    expect(p.x).toBeCloseTo(belt.x);
+  });
+
+  it('keeps training vents harmless and restores props on restart', () => {
+    const game = training();
+    expect(game.world.props).toBeDefined();
+    const vent = game.world.props.find((prop) => prop.kind === 'vent')!;
+    game.world.player.x = vent.x; game.world.player.z = vent.z;
+    step(game, 600);
+    expect(game.world.player.damage).toBe(0);
+    game.world.props[0]!.alive = false;
+    game.restart();
+    expect(game.world.props.every((prop) => prop.alive)).toBe(true);
+  });
+});

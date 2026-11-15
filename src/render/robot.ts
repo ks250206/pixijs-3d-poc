@@ -8,6 +8,7 @@ import {
   TorusGeometry,
 } from '@pixi/3d';
 import type { Actor, ActorKind, WeaponId } from '../game/types';
+import { attackMotion } from './motion';
 
 export interface RobotAssets {
   cube: CubeGeometry;
@@ -39,6 +40,8 @@ export class RobotView {
   private readonly blade = new Container3D();
   private readonly hammer = new Container3D();
   private readonly fist = new Container3D();
+  private readonly offhand = new Container3D();
+  private readonly guardPlate = new Container3D();
   private readonly parts: { mesh: Mesh3D; material: Material3D }[] = [];
   private readonly rotors: Container3D[] = [];
   private flashed = false;
@@ -121,7 +124,7 @@ export class RobotView {
 
   private buildHumanoid(armor: Material3D, glow: Material3D): void {
     const boss = this.kind === 'boss';
-    const heavy = boss || this.kind === 'bruiser';
+    const heavy = boss || this.kind === 'bruiser' || this.kind === 'sentinel';
     const width = boss ? 1.12 : heavy ? 0.86 : 0.64;
     const a = this.assets;
     this.root.addChild(this.body, this.leftLeg, this.rightLeg);
@@ -185,6 +188,23 @@ export class RobotView {
       this.box(this.head, glow, -0.18, 0.3, 0, 0.04, 0.4, 0.04, false);
     } else if (this.kind === 'scout') {
       this.box(this.rightArm, glow, 0, -0.63, 0.45, 0.05, 0.08, 0.9, false);
+    } else if (this.kind === 'sentinel') {
+      this.leftArm.addChild(this.guardPlate);
+      this.box(this.guardPlate, a.trim, 0, -0.48, 0.36, 0.88, 1.35, 0.18);
+      this.box(this.guardPlate, armor, 0, -0.48, 0.48, 0.73, 1.18, 0.12);
+      this.box(this.guardPlate, glow, 0, -0.48, 0.56, 0.06, 1.05, 0.03, false);
+      this.box(this.guardPlate, glow, 0, -0.48, 0.57, 0.6, 0.07, 0.03, false);
+      this.box(this.rightArm, a.trim, 0, -0.65, 0.45, 0.2, 0.25, 0.9);
+    } else if (this.kind === 'charger') {
+      for (const side of [-1, 1]) {
+        this.box(this.body, armor, side * 0.51, 0.6, 0.2, 0.45, 0.36, 0.5);
+        this.box(this.body, glow, side * 0.51, 0.62, 0.55, 0.1, 0.12, 0.5, false);
+        this.box(this.body, a.trim, side * 0.27, 0.25, -0.4, 0.22, 0.6, 0.3);
+        this.box(this.body, glow, side * 0.27, 0.02, -0.58, 0.15, 0.2, 0.09, false);
+      }
+    } else if (this.kind === 'bruiser') {
+      this.box(this.rightArm, a.trim, 0, -0.73, 0.2, 0.7, 0.6, 0.7);
+      this.box(this.rightArm, glow, 0, -0.73, 0.57, 0.5, 0.12, 0.04, false);
     }
 
     if (this.kind === 'player') {
@@ -200,6 +220,9 @@ export class RobotView {
       this.fist.position.set(0, -0.71, 0.15);
       this.box(this.fist, a.white, 0, 0, 0.06, 0.35, 0.3, 0.4, false);
       for (const x of [-0.1, 0, 0.1]) this.box(this.fist, glow, x, 0.05, 0.48, 0.035, 0.06, 0.6, false);
+      this.leftArm.addChild(this.offhand);
+      this.box(this.offhand, a.white, 0, -0.71, 0.21, 0.35, 0.3, 0.4, false);
+      for (const x of [-0.1, 0, 0.1]) this.box(this.offhand, glow, x, -0.66, 0.63, 0.035, 0.06, 0.6, false);
     }
   }
 
@@ -249,7 +272,9 @@ export class RobotView {
       this.blade.visible = weapon === 'arc';
       this.hammer.visible = weapon === 'pile';
       this.fist.visible = weapon === 'razor';
+      this.offhand.visible = weapon === 'razor';
     }
+    this.guardPlate.visible = actor.guard > 0;
 
     const flash = actor.state === 'hurt' && Math.floor(actor.stateTime * 24) % 2 === 0;
     if (flash !== this.flashed) {
@@ -263,6 +288,7 @@ export class RobotView {
     if (this.isDrone) {
       this.body.y = 0.8 + Math.sin(time * 4.5) * 0.08;
       this.body.rotation.z = Math.sin(time * 2.7) * 0.05 - actor.vx * 0.02;
+      this.body.rotation.x = actor.state === 'attack' ? actor.telegraph > 0 ? -0.3 : 0.45 : 0;
       for (const rotor of this.rotors) rotor.rotation.y = time * 35;
       return;
     }
@@ -296,15 +322,16 @@ export class RobotView {
         this.rightLeg.rotation.x = 0.3;
         break;
       case 'attack': {
-        const progress = actor.attack ? Math.min(1, actor.attack.elapsed / actor.attack.duration) : Math.min(1, actor.stateTime * 3);
-        const swing = Math.sin(progress * Math.PI);
-        this.body.rotation.y = -0.5 + progress;
-        this.body.rotation.x = swing * 0.17;
-        this.rightArm.rotation.set(-2.2 + progress * 3.3, -0.7 + progress * 1.4, -0.25);
-        this.leftArm.rotation.x = -0.4 - swing * 0.5;
-        this.leftLeg.rotation.x = -0.25;
-        this.rightLeg.rotation.x = 0.2;
-        if (actor.attack?.direction === 'up') this.rightArm.rotation.x = -Math.PI * progress;
+        if (!actor.attack) break;
+        const style = this.kind === 'player' ? weapon : this.kind === 'bruiser' || this.kind === 'boss' ? 'pile' : this.kind === 'scout' ? 'arc' : 'razor';
+        const pose = attackMotion(actor.attack, style);
+        const blend = (rest: number, target: number) => rest + (target - rest) * pose.weight;
+        this.body.rotation.set(pose.bodyX * pose.weight, pose.bodyY * pose.weight, 0);
+        this.body.position.y += pose.crouch * pose.weight;
+        this.rightArm.rotation.set(blend(-0.15, pose.rightArmX), pose.rightArmY * pose.weight, blend(-0.08, pose.rightArmZ));
+        this.leftArm.rotation.set(blend(-0.07, pose.leftArmX), pose.leftArmY * pose.weight, blend(0.08, pose.leftArmZ));
+        this.leftLeg.rotation.x = pose.leftLegX * pose.weight;
+        this.rightLeg.rotation.x = pose.rightLegX * pose.weight;
         break;
       }
       case 'grab':
@@ -339,6 +366,10 @@ export class RobotView {
     }
 
     if (this.kind === 'gunner' && actor.state === 'idle') this.rightArm.rotation.x = -1.1;
+    if (this.kind === 'sentinel' && actor.guard > 0 && (actor.state === 'idle' || actor.state === 'run')) {
+      this.leftArm.rotation.x = -0.35;
+      this.body.rotation.y = 0.25;
+    }
   }
 
   destroy(): void {
