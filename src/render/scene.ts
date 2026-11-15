@@ -1,4 +1,5 @@
 import { Application, Container, Graphics, RendererType, Text, Texture } from 'pixi.js';
+import type { WebGLRenderer } from 'pixi.js';
 import {
   Box,
   Container3D,
@@ -86,14 +87,22 @@ export class GameScene {
     this.app = app;
     this.host = host;
     this.backend = app.renderer.type === RendererType.WEBGPU ? 'WebGPU' : 'WebGL2';
+    const compatibilityMode = new URLSearchParams(location.search).get('quality') === 'compat';
+    // The beta generates a float BRDF target even for a hemisphere environment.
+    const supportsFloatTargets = app.renderer.type !== RendererType.WEBGL
+      || Boolean((app.renderer as WebGLRenderer).context.extensions.colorBufferFloat);
     this.view = new View3D({
       width: host.clientWidth || 1280,
       height: host.clientHeight || 720,
+      // Isolate scene depth from the Pixi 2D background and combat labels.
+      composite: true,
       toneMapping: 'aces',
       exposure: 1.1,
       shadowQuality: 'medium',
       shadowFilter: 'pcf',
-      environment: { skyColor: 0x718aa1, groundColor: 0x161f33, intensity: 0.7 },
+      environment: supportsFloatTargets && !compatibilityMode
+        ? { skyColor: 0x718aa1, groundColor: 0x161f33, intensity: 0.7 }
+        : null,
     });
     this.view.eventMode = 'none';
     this.labels.eventMode = 'none';
@@ -146,8 +155,10 @@ export class GameScene {
 
   static async create(host: HTMLElement): Promise<GameScene> {
     const app = new Application();
+    const params = new URLSearchParams(location.search);
+    const compatibilityMode = params.get('quality') === 'compat';
     let preference: 'webgpu' | 'webgl' = 'webgl';
-    if (new URLSearchParams(location.search).get('renderer') === 'webgpu') {
+    if (params.get('renderer') === 'webgpu') {
       try {
         const adapter = await navigator.gpu?.requestAdapter();
         if (adapter?.features.has('indirect-first-instance')) preference = 'webgpu';
@@ -157,7 +168,7 @@ export class GameScene {
       preference,
       width: host.clientWidth || 1280,
       height: host.clientHeight || 720,
-      antialias: true,
+      antialias: !compatibilityMode,
       background: 0x080f19,
       autoDensity: true,
       resolution: Math.min(window.devicePixelRatio || 1, 1.5),
@@ -459,7 +470,7 @@ export class GameScene {
     const point = this.view.worldToScreen({ x: actor.x, y: actor.y + actor.scale * (actor.kind === 'drone' ? 1.6 : boss ? 2.45 : 2.3), z: actor.z });
     view.label.visible = actor.alive && point !== null && world.phase !== 'ready';
     if (point) view.label.position.copyFrom(point);
-    const labelText = `${boss ? 'OVERSEER  ' : actor.kind === 'player' ? 'YOU  ' : ''}${Math.round(actor.damage)}%`;
+    const labelText = `${boss ? 'THE ARCHITECT  ' : actor.kind === 'player' ? 'YOU  ' : ''}${Math.round(actor.damage)}%`;
     if (view.label.text !== labelText) view.label.text = labelText;
     view.label.style.fill = actor.damage > 110 ? 0xff695f : actor.damage > 65 ? 0xffc27b : COLORS[actor.kind];
 

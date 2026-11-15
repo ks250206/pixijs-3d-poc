@@ -9,6 +9,7 @@ PixiJSの公式3Dエンジン **`@pixi/3d`** で作る、アンドロイドの�
 - **[通常プレイ](https://ks250206.github.io/pixijs-3d-poc/)** — 3機の候補から選んで出撃。
 - **[トレーニングをすぐ始める](https://ks250206.github.io/pixijs-3d-poc/?play=training&seed=73)** — 敵が攻撃しない練習モード。操作・当たり判定・絶を試す。
 - **[WebGPUを試す](https://ks250206.github.io/pixijs-3d-poc/?renderer=webgpu)** — 対応GPU・ブラウザーでWebGPUを選択。通常はWebGL 2。
+- **[描画の互換モード](https://ks250206.github.io/pixijs-3d-poc/?quality=compat)** — 環境光とアンチエイリアスを省いた描画。3Dが表示されない環境で試せます。
 - **[ビルド・公開状況](https://github.com/ks250206/pixijs-3d-poc/actions/workflows/pages.yml)**
 
 PCはキーボードまたは標準ゲームパッド、スマートフォンは画面内のスティックと6ボタンで操作できます。タッチ操作は横向き推奨です。画面右上のコントローラーアイコンから操作ガイドを開けます。
@@ -112,6 +113,8 @@ PCはキーボードまたは標準ゲームパッド、スマートフォンは
 - WebGL 2による通常描画と、対応環境でのWebGPU描画。
 - 共有ジオメトリとエフェクト数の上限、DPR上限による描画負荷の制御。
 
+3Dは専用の色・深度バッファへ描画してから2Dレイヤーと合成します。WebGLで浮動小数点レンダーターゲットが使えない場合は環境光を自動的に省き、方向光を使います。さらに `?quality=compat` で環境光とアンチエイリアスを明示的に無効にできます。
+
 モデル・看板テクスチャ・効果音はコードから生成します。外部のモデル配信サービスや音声ファイルは必要ありません。物理とヒット判定はゲーム側の独立した固定60Hzのシミュレーションで、PixiJSが担当するのは描画です。
 
 ## 開発
@@ -157,7 +160,7 @@ Vite+のグローバルCLIを使う場合も、`vp dev` / `vp test` / `vp build`
 
 ### GitHub Pages
 
-`main`への変更で `.github/workflows/pages.yml` が型検査、ロジックテスト、ビルド、Chromiumでのブラウザーテストを実施し、成功した `dist/` をGitHub Pagesへ公開します。テストで撮影したデスクトップ・モバイルの画像もActionsのアーティファクトに保存します。
+`main`への変更で `.github/workflows/pages.yml` が型検査、ロジックテスト、ビルド、Chromiumでのブラウザーテストを実施し、成功した `dist/` をGitHub Pagesへ公開します。通常・互換モードでは実際のキャンバスの画素も調べ、3Dが描画されていることを確認します。テストで撮影したデスクトップ・モバイルの画像もActionsのアーティファクトに保存します。
 
 Viteの`base`は`/pixijs-3d-poc/`。別のリポジトリ名へ移す場合は `vite.config.ts` とREADMEのURLを変更してください。
 
