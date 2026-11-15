@@ -1,4 +1,4 @@
-import { SECTOR_NAMES, SECTOR_SUBTITLES, SPECIAL_NAMES, TRAIT_NAMES, WEAPON_NAMES, type GameMode, type Loadout, type WorldState } from '../game/types';
+import { SECTOR_HINTS, SECTOR_NAMES, SECTOR_SUBTITLES, SPECIAL_NAMES, TRAIT_NAMES, WEAPON_NAMES, type GameMode, type Loadout, type WorldState } from '../game/types';
 import './styles.css';
 
 export interface GameUICallbacks {
@@ -84,6 +84,7 @@ export class GameUI {
           <h2 data-hud="sectorName">THE FOUNDRY</h2>
           <p data-hud="objective">製造区画を突破</p>
           <div class="wave-row"><div class="sector-progress" aria-hidden="true"><i></i><i></i><i></i></div><span data-hud="wave">WAVE 01 / 02</span></div>
+          <p class="arena-hint" data-hud="arenaHint"></p>
         </section>
         <div class="combat-counter"><span class="micro-label">HOSTILES DECOMMISSIONED</span><strong><span data-hud="kills">00</span><i> KO</i></strong><span data-hud="remaining">ENEMIES / 00</span></div>
         <div class="boss-card" data-hud="boss" hidden><div class="boss-heading"><span>⚠ THE ARCHITECT / CENTRAL INTELLIGENCE</span><b data-hud="bossDamage">0%</b></div><div class="boss-track"><i data-hud="bossArmor"></i></div><span data-hud="bossHint">ARMOR ONLINE — 攻撃して装甲を破壊</span></div>
@@ -260,6 +261,8 @@ export class GameUI {
         <section><h3>02 / NORMAL ATTACKS</h3><dl><div><dt><kbd>J</kbd></dt><dd>地上：弱攻撃 / 空中：通常空中攻撃</dd></div><div><dt>方向を押し続けて <kbd>J</kbd></dt><dd>地上：強攻撃 / 空中：方向別の空中攻撃</dd></div><div><dt><kbd>K</kbd> 長押し → 離す</dt><dd>スマッシュを溜めて発動。方向で技が変化<br>方向の素早い入力＋Jでもスマッシュ</dd></div><div><dt>ダッシュ中に <kbd>J</kbd></dt><dd>ダッシュ攻撃</dd></div></dl></section>
         <section><h3>03 / SPECIAL & THROW</h3><dl><div><dt><kbd>L</kbd> / 方向＋<kbd>L</kbd></dt><dd>通常・横・上・下の必殺技<br>上必殺技は復帰にも使える</dd></div><div><dt><kbd>I</kbd> / <kbd>E</kbd></dt><dd>近くの敵をつかむ。方向や攻撃で投げる</dd></div></dl><p class="help-note">機体の武器・必殺技・特性は毎回ランダム。選択画面の倍率が実際の性能に反映される。</p></section>
         <section><h3>04 / DEFENSE & WAVEDASH</h3><dl><div><dt><kbd>Shift</kbd></dt><dd>地上：その場回避 / 方向＋Shift：回避移動</dd></div><div><dt>空中で方向＋<kbd>Shift</kbd></dt><dd>方向空中回避。着地まで1回のみ</dd></div></dl><div class="wavedash-tip"><b>WAVEDASH / 絶</b><p>小ジャンプ → 地面のすぐ上で<b>斜め下＋Shift</b>。着地時の慣性で地面を滑る。</p><span><kbd>Space</kbd><i>→</i><kbd>↘</kbd><b>+</b><kbd>Shift</kbd></span></div></section>
+        <section><h3>05 / ENEMY TACTICS</h3><dl><div><dt>SENTINEL / 盾兵</dt><dd>正面の盾はダメージを軽減。背後へ回り込むか、つかみ・溜めスマッシュで崩す。</dd></div><div><dt>CHARGER / 突進兵</dt><dd>赤いレーンを予告して直進。奥行き移動でかわし、停止後の隙を狙う。</dd></div><div><dt>SCOUT / BRUISER / GUNNER / DRONE</dt><dd>回り込み、地面スラム、狙撃、飛び込み。射線は予告時に固定される。低いスラムはジャンプで回避。</dd></div></dl></section>
+        <section><h3>06 / ARENA SYSTEMS</h3><dl><div><dt>緑の修復箱 / オレンジの爆発ドラム</dt><dd>攻撃で破壊。緑の補給を拾うと蓄積ダメージを25%修復。爆発は自機にも当たる。設備は弾よけにもなる。</dd></div><div><dt>危険床 / 搬送ベルト</dt><dd>危険床は赤い点滅とカウントダウンの後に噴出。レーン移動やジャンプでかわす。青い矢印の床は接地中だけ機体を運ぶ。</dd></div><div><dt>TRAINING</dt><dd>敵の攻撃と危険床は停止。敵を全滅させると別の編成が現れ、盾兵や突進兵の機体も試せる。</dd></div></dl></section>
       </div>
       <div class="gamepad-guide">${icons.controls}<p><b>GAMEPAD SUPPORTED</b><span>左スティック：移動 / A：ジャンプ / X：攻撃 / B：必殺技 / Y：つかみ<br>LB・RB・LT・RT：回避 / 右スティック：スマッシュ / START：一時停止</span></p></div><div class="help-bottom"><span>タッチ操作は画面上部の指アイコンから切り替え可能。</span><button type="button" class="small-button" data-action="close-help">了解、出撃する →</button></div>
     </section>`);
@@ -333,6 +336,7 @@ export class GameUI {
     setText(this.elements.sectorIndex, world.mode === 'training' ? 'COMBAT LAB / ∞' : `SECTOR 0${world.sector + 1} / 03`);
     setText(this.elements.sectorName, world.mode === 'training' ? 'TRAINING GROUND' : SECTOR_NAMES[world.sector] ?? 'THE MAINFRAME');
     setText(this.elements.objective, world.mode === 'training' ? '動きを試す。敵は繰り返し出現する' : SECTOR_SUBTITLES[world.sector] ?? '統制AIを停止');
+    setText(this.elements.arenaHint, world.mode === 'training' ? '危険床は停止 / 箱とドラムは攻撃で破壊' : SECTOR_HINTS[world.sector] ?? '');
     setText(this.elements.mode, world.mode === 'training' ? 'SANDBOX' : 'LIVE');
     setText(this.elements.wave, world.mode === 'training' ? 'FREE PRACTICE' : `WAVE 0${world.wave} / 02`);
     this.host.querySelectorAll<HTMLElement>('.sector-progress i').forEach((element, i) => element.classList.toggle('active', i <= world.sector));

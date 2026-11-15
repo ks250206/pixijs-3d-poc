@@ -59,6 +59,7 @@ canvas { display: block; }
 .live-label { color: var(--cyan); font-size: 8px; border: 1px solid #86ffe242; padding: 3px 6px; letter-spacing: .8px; }
 .sector-card h2 { font-family: var(--display); font-size: 23px; font-weight: 900; letter-spacing: -.7px; margin: 9px 0 5px; }
 .sector-card p { color: #a1b4bc; font-size: 11px; margin: 0; letter-spacing: .5px; }
+.sector-card .arena-hint { margin-top: 12px; max-width: 246px; color: #b4c9cd; font-size: 10px; line-height: 1.7; letter-spacing: 0; }
 .wave-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; color: #a5b8bd; font: 8px var(--mono); letter-spacing: .8px; }
 .sector-progress { display: flex; gap: 5px; }
 .sector-progress i { display: block; width: 29px; height: 3px; background: #365057; }

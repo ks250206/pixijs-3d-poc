@@ -15,7 +15,8 @@ import {
   TorusGeometry,
   View3D,
 } from '@pixi/3d';
-import type { Actor, ActorKind, Effect, Projectile, WorldState } from '../game/types';
+import { ENEMY_NAMES, type Actor, type ActorKind, type ArenaProp, type Effect, type Projectile, type WorldState } from '../game/types';
+import { attackMotion } from './motion';
 import { RobotView } from './robot';
 import type { RobotAssets } from './robot';
 
@@ -25,6 +26,8 @@ const COLORS: Record<ActorKind, number> = {
   bruiser: 0xffb64a,
   gunner: 0xb99aff,
   drone: 0xff66ca,
+  sentinel: 0x68baff,
+  charger: 0xff9050,
   boss: 0xff654d,
 };
 
@@ -34,6 +37,14 @@ interface ActorView {
   slash: Mesh3D;
   slashEdge: Mesh3D;
   charge: Mesh3D;
+  danger: Mesh3D;
+}
+
+interface PropView {
+  root: Container3D;
+  indicator: Mesh3D;
+  movers: Container3D[];
+  label: Text;
 }
 
 interface EffectView {
@@ -60,6 +71,7 @@ export class GameScene {
   private readonly actors = new Map<string, ActorView>();
   private readonly effects = new Map<string, EffectView>();
   private readonly projectiles = new Map<string, ProjectileView>();
+  private readonly props = new Map<string, PropView>();
   private readonly materials: Material3D[] = [];
   private readonly textures: Texture[] = [];
   private readonly glowCache = new Map<number, Material3D>();
@@ -76,6 +88,7 @@ export class GameScene {
   private readonly lamps: Mesh3D[] = [];
   private readonly flyingLights: Mesh3D[] = [];
   private readonly accent: Material3D;
+  private readonly warningMaterial: Material3D;
   private readonly resizeObserver: ResizeObserver;
   private viewportWidth = 1;
   private viewportHeight = 1;
@@ -135,6 +148,8 @@ export class GameScene {
       bruiser: this.material(0xae7638, 0.53, 0.5),
       gunner: this.material(0x62517e, 0.5, 0.4),
       drone: this.material(0x8d496f, 0.47, 0.38),
+      sentinel: this.material(0x375779, 0.4, 0.6),
+      charger: this.material(0xad5134, 0.6, 0.4),
       boss: this.material(0x424d60, 0.42, 0.65),
     };
     this.assets = {
@@ -152,6 +167,7 @@ export class GameScene {
       glow: Object.fromEntries(Object.entries(COLORS).map(([kind, color]) => [kind, this.glow(color)])) as Record<ActorKind, Material3D>,
     };
     this.accent = this.material(0x37dcd2, 0.55, 0.2);
+    this.warningMaterial = this.material(0xff654d, 0.8, 0, 0.22);
     this.slashGeometry = this.makeSlash();
     this.buildEnvironment();
     this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -435,6 +451,97 @@ export class GameScene {
     }
   }
 
+  private makeProp(prop: ArenaProp): PropView {
+    const root = new Container3D();
+    root.label = `arena-${prop.kind}`;
+    this.view.root.addChild(root);
+    const steel = this.assets.trim, dark = this.assets.joint;
+    const color = prop.kind === 'crate' || prop.kind === 'repair' ? 0x65f0b1 : prop.kind === 'conveyor' ? 0x84bfff : 0xff9f50;
+    const glow = this.glow(color);
+    const movers: Container3D[] = [];
+    let indicator: Mesh3D;
+    if (prop.kind === 'crate') {
+      this.box(root, dark, 0, 0.5, 0, 1.1, 1, 1.1);
+      for (const x of [-0.46, 0.46]) this.box(root, steel, x, 0.5, 0, 0.14, 1.07, 1.16);
+      this.box(root, steel, 0, 1.03, 0, 1.1, 0.1, 1.1);
+      indicator = this.box(root, glow, 0, 0.55, 0.56, 0.55, 0.12, 0.025);
+      this.box(root, glow, 0, 0.55, 0.58, 0.12, 0.55, 0.025);
+    } else if (prop.kind === 'barrel') {
+      this.mesh(root, this.cylinder, steel, 0, 0.67, 0, 0.48, 1.35, 0.48);
+      for (const y of [0.12, 1.2]) this.mesh(root, this.cylinder, dark, 0, y, 0, 0.54, 0.12, 0.54);
+      indicator = this.mesh(root, this.cylinder, glow, 0, 0.72, 0, 0.49, 0.12, 0.49);
+      this.box(root, glow, 0, 1.4, 0, 0.22, 0.12, 0.22);
+    } else if (prop.kind === 'repair') {
+      indicator = this.box(root, glow, 0, 0.75, 0, 0.6, 0.18, 0.18);
+      this.box(root, glow, 0, 0.75, 0, 0.18, 0.6, 0.18);
+      this.mesh(root, this.ring, glow, 0, 0.05, 0, 0.5, 0.5, 0.5);
+    } else {
+      this.box(root, dark, 0, 0.025, 0, prop.width, 0.05, prop.depth);
+      indicator = this.box(root, glow, 0, 0.065, -prop.depth / 2, prop.width, 0.025, 0.07);
+      this.box(root, glow, 0, 0.065, prop.depth / 2, prop.width, 0.025, 0.07);
+      if (prop.kind === 'vent') {
+        for (let i = 0; i < 5; i++) {
+          const x = (i - 2) * prop.width / 5;
+          this.box(root, steel, x, 0.07, 0, 0.12, 0.08, prop.depth * 0.85);
+          const plume = new Container3D();
+          plume.x = x;
+          this.box(plume, glow, 0, 0.55, 0, 0.12, 1.1, prop.depth * 0.55);
+          root.addChild(plume);
+          movers.push(plume);
+        }
+      } else {
+        for (let i = 0; i < 6; i++) {
+          const arrow = new Container3D();
+          for (const sign of [-1, 1]) {
+            const stroke = this.box(arrow, glow, 0, 0.07, sign * 0.15, 0.38, 0.018, 0.07);
+            stroke.rotation.y = sign * prop.direction * 0.75;
+          }
+          root.addChild(arrow);
+          movers.push(arrow);
+        }
+      }
+    }
+    const label = new Text({ text: '', style: { fontFamily: 'monospace', fontSize: 10, fontWeight: '700', fill: color, stroke: { color: 0x071019, width: 3 }, align: 'center' } });
+    label.anchor.set(0.5, 1);
+    this.labels.addChild(label);
+    const entry = { root, indicator, movers, label };
+    this.props.set(prop.id, entry);
+    return entry;
+  }
+
+  private updateProps(world: WorldState): void {
+    const ids = new Set<string>();
+    for (const prop of world.props) {
+      ids.add(prop.id);
+      const entry = this.props.get(prop.id) ?? this.makeProp(prop);
+      entry.root.position.set(prop.x, 0, prop.z);
+      entry.root.visible = prop.alive;
+      const point = this.view.worldToScreen({ x: prop.x, y: prop.height + 0.5, z: prop.z });
+      entry.label.visible = prop.alive && point !== null && world.phase !== 'ready';
+      if (point) entry.label.position.copyFrom(point);
+      const title = prop.kind === 'crate' ? `REPAIR BOX / ${Math.ceil(prop.hp)}` : prop.kind === 'barrel' ? '⚠ EXPLOSIVE' : prop.kind === 'repair' ? 'REPAIR −25%' : prop.kind === 'conveyor' ? (prop.direction > 0 ? 'CONVEYOR →' : '← CONVEYOR') : prop.phase === 'warning' ? `⚠ HEAT / ${Math.max(0, 5 - prop.timer).toFixed(1)}s` : prop.phase === 'active' ? '▲ HEAT ▲' : 'VENT';
+      if (entry.label.text !== title) entry.label.text = title;
+      if (prop.kind === 'vent') {
+        entry.indicator.material = prop.phase === 'idle' ? this.assets.trim : this.glow(0xff654d);
+        entry.indicator.visible = prop.phase !== 'warning' || Math.sin(world.time * 20) > -0.2;
+        entry.movers.forEach((plume, index) => {
+          plume.visible = prop.phase === 'active';
+          plume.scale.y = 0.8 + Math.sin(world.time * 24 + index) * 0.2;
+        });
+      } else if (prop.kind === 'conveyor') {
+        entry.movers.forEach((arrow, index) => {
+          arrow.x = (((world.time * 1.8 * prop.direction + index * 2) % prop.width + prop.width) % prop.width) - prop.width / 2;
+        });
+      } else if (prop.kind === 'repair') {
+        entry.root.y = Math.sin(world.time * 3) * 0.1;
+        entry.root.rotation.y = world.time * 1.6;
+      }
+    }
+    for (const [id, entry] of this.props) {
+      if (!ids.has(id)) { entry.root.destroy({ children: true }); entry.label.destroy(); this.props.delete(id); }
+    }
+  }
+
   resize(): void {
     if (this.destroyed) return;
     const width = Math.max(1, this.host.clientWidth);
@@ -476,7 +583,9 @@ export class GameScene {
     slash.visible = slashEdge.visible = false;
     const charge = this.mesh(this.view.root, this.ring, this.assets.glow[actor.kind], 0, 0, 0);
     charge.visible = false;
-    const view = { robot, label, slash, slashEdge, charge };
+    const danger = this.mesh(this.view.root, this.cube, this.warningMaterial, 0, 0.04, 0);
+    danger.visible = false;
+    const view = { robot, label, slash, slashEdge, charge, danger };
     this.actors.set(actor.id, view);
     return view;
   }
@@ -488,22 +597,36 @@ export class GameScene {
     const point = this.view.worldToScreen({ x: actor.x, y: actor.y + actor.scale * (actor.kind === 'drone' ? 1.6 : boss ? 2.45 : 2.3), z: actor.z });
     view.label.visible = actor.alive && point !== null && world.phase !== 'ready';
     if (point) view.label.position.copyFrom(point);
-    const labelText = `${boss ? 'THE ARCHITECT  ' : actor.kind === 'player' ? 'YOU  ' : ''}${Math.round(actor.damage)}%`;
+    const labelText = `${ENEMY_NAMES[actor.kind]}  ${Math.round(actor.damage)}%${actor.guard > 0 ? `\n▰ GUARD ${Math.ceil(actor.guard)}` : ''}`;
     if (view.label.text !== labelText) view.label.text = labelText;
     view.label.style.fill = actor.damage > 110 ? 0xff695f : actor.damage > 65 ? 0xffc27b : COLORS[actor.kind];
 
     const attack = actor.attack;
     view.slash.visible = view.slashEdge.visible = actor.alive && attack !== null && actor.state === 'attack';
     if (attack) {
-      const progress = Math.min(1, attack.elapsed / Math.max(0.01, attack.duration));
+      const style = actor.kind === 'player' ? world.loadout.weapon : actor.kind === 'boss' || actor.kind === 'bruiser' ? 'pile' : 'arc';
+      const motion = attackMotion(attack, style);
       const strength = attack.kind === 'smash' ? 1.55 : attack.kind === 'special' ? 1.7 : 1;
-      const scale = Math.min(3.8, attack.range * 0.7) * strength * (0.6 + Math.sin(progress * Math.PI) * 0.5);
+      const scale = Math.min(3.8, attack.range * 0.7) * strength * (0.75 + Math.sin(motion.swing * Math.PI) * 0.25);
+      const facing = attack.direction === 'back' ? -actor.facing : actor.facing;
       for (const [i, slash] of [view.slash, view.slashEdge].entries()) {
-        slash.position.set(actor.x + actor.facing * actor.scale * 0.3, actor.y + actor.scale * 1.1, actor.z + 0.35 + i * 0.025);
-        slash.scale.set(scale * actor.facing * (i ? 0.94 : 1), scale * (i ? 0.94 : 1), 1);
-        slash.rotation.set(0.12, 0, actor.facing * (1.5 - progress * 3.2));
-        slash.visible = slash.visible && progress > 0.08 && progress < 0.82;
+        slash.position.set(actor.x + facing * actor.scale * 0.3, actor.y + (attack.direction === 'down' ? 0.35 : actor.scale * 1.1), actor.z + 0.35 + i * 0.025);
+        slash.scale.set(scale * facing * (i ? 0.94 : 1), scale * (i ? 0.94 : 1), 1);
+        slash.rotation.set(motion.slashX, motion.slashY, facing * motion.slashZ);
+        slash.visible = slash.visible && motion.trail;
       }
+    }
+    view.danger.visible = actor.alive && actor.kind !== 'player' && actor.telegraph > 0 && actor.state === 'attack';
+    if (view.danger.visible && attack) {
+      const ranged = attack.name.includes('SHOT') || attack.name.includes('LASER');
+      const rush = attack.name === 'RAIL CHARGE' || attack.name === 'SHOCK DIVE';
+      const radial = attack.direction === 'down';
+      const length = ranged ? 13 : rush ? 7.5 : radial ? attack.range * 2 : attack.range;
+      const angle = ranged && actor.aim ? Math.atan2(actor.aim.z - actor.z, actor.aim.x - actor.x) : actor.facing > 0 ? 0 : Math.PI;
+      const width = ranged ? (boss ? 3 : 0.42) : rush ? 1.6 : radial ? (boss ? 7 : 4) : boss ? 5.8 : 2.4;
+      view.danger.position.set(actor.x + (radial ? 0 : Math.cos(angle) * length / 2), 0.045, actor.z + (radial ? 0 : Math.sin(angle) * length / 2));
+      view.danger.scale.set(length, 0.015, width);
+      view.danger.rotation.y = -angle;
     }
     view.charge.visible = actor.alive && actor.state === 'charge';
     if (view.charge.visible) {
@@ -607,6 +730,7 @@ export class GameScene {
     this.view.camera.position.set(this.cameraX + shakeX, 13 + shakeY, 23);
     this.view.camera.lookAt({ x: this.cameraX, y: 1.1 + shakeY, z: -0.4 });
     this.sun.shadow.bounds = Box.fromCenterSize({ x: world.cameraX, y: 4, z: 0 }, { x: 30, y: 16, z: 15 });
+    this.updateProps(world);
 
     const aliveIds = new Set<string>();
     for (const actor of [world.player, ...world.enemies]) {
@@ -620,6 +744,7 @@ export class GameScene {
         entry.slash.destroy();
         entry.slashEdge.destroy();
         entry.charge.destroy();
+        entry.danger.destroy();
         this.actors.delete(id);
       }
     }
