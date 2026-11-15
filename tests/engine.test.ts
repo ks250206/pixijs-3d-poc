@@ -388,6 +388,33 @@ describe('enemy tactics', () => {
     expect(grabGame.world.enemies[0]!.state).toBe('grabbed');
   });
 
+  it('blocks a frontal projectile even after its owner changes lanes', () => {
+    const game = training(), target = game.world.enemies[0]!;
+    game.world.loadout = { ...game.world.loadout, special: 'pulse' };
+    target.kind = 'sentinel'; target.guard = 40; target.facing = -1; target.x = 5;
+    game.update(1 / 60, frame({ special: true }));
+    for (let i = 0; i < 30 && !game.world.projectiles.length; i++) step(game, 1);
+    expect(game.world.projectiles.length).toBe(1);
+    game.world.player.z = 3.5;
+    step(game, 25);
+    expect(target.damage).toBeCloseTo(15 * game.world.loadout.power * 0.12);
+    expect(target.guard).toBeCloseTo(40 - 15 * game.world.loadout.power);
+  });
+
+  it('keeps a rear projectile unblocked when its owner moves in front of the shield', () => {
+    const game = training(), target = game.world.enemies[0]!;
+    game.world.loadout = { ...game.world.loadout, special: 'pulse' };
+    target.kind = 'sentinel'; target.guard = 40; target.facing = 1; target.x = 5;
+    game.update(1 / 60, frame({ special: true }));
+    for (let i = 0; i < 30 && !game.world.projectiles.length; i++) step(game, 1);
+    expect(game.world.projectiles.length).toBe(1);
+    game.world.player.x = 8;
+    step(game, 25);
+    expect(target.damage).toBeCloseTo(15 * game.world.loadout.power);
+    expect(target.guard).toBe(40);
+    expect(game.world.combo).toBe(1);
+  });
+
   it('locks the gunner aim during the warning, allowing a lane dodge', () => {
     const game = training(), enemy = game.world.enemies[0]!;
     game.world.enemies = [enemy]; game.world.mode = 'campaign';

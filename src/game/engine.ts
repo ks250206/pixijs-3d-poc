@@ -706,7 +706,7 @@ export class GameEngine {
         if (!target.alive || target.invulnerable > 0 || shot.life <= 0) continue;
         if (Math.abs(shot.x - target.x) < 0.55 * target.scale + shot.radius && Math.abs(shot.z - target.z) < 0.5 * target.scale + shot.radius && shot.y > target.y - 0.1 && shot.y < target.y + 1.85 * target.scale) {
           const data = this.shots.get(shot.id);
-          if (data) this.hit(target, source, data.damage, data.force, data.growth, 0.45, data.facing, 'special');
+          if (data) this.hit(target, source, data.damage, data.force, data.growth, 0.45, data.facing, 'special', shot);
           shot.life = 0;
         }
       }
@@ -717,12 +717,17 @@ export class GameEngine {
     });
   }
 
-  private hit(target: Actor, source: Actor, damage: number, force: number, growth: number, angle: number, facing: 1 | -1, kind: AttackKind): void {
+  private hit(target: Actor, source: Actor, damage: number, force: number, growth: number, angle: number, facing: 1 | -1, kind: AttackKind, projectile?: Pick<Projectile, 'vx'>): void {
     if (!target.alive || target.invulnerable > 0) return;
     const w = this.world, m = this.memory(target);
     if (m.grabTarget) this.releaseGrab(target);
     const guarding = target.kind === 'sentinel' && target.guard > 0 && target.state !== 'attack' && target.state !== 'hurt' && target.state !== 'grabbed';
-    if (guarding && kind !== 'throw' && !source.id.startsWith('arena-') && (source.x - target.x) * target.facing > 0 && Math.abs(source.z - target.z) < 1.5) {
+    // Shots retain their owner for scoring, but guard against their incoming
+    // direction: the owner can move independently while the shot is in flight.
+    const hitsShieldFront = projectile
+      ? projectile.vx * target.facing < 0
+      : (source.x - target.x) * target.facing > 0 && Math.abs(source.z - target.z) < 1.5;
+    if (guarding && kind !== 'throw' && !source.id.startsWith('arena-') && hitsShieldFront) {
       target.guard = Math.max(0, target.guard - damage * (kind === 'smash' ? 2.5 : 1));
       if (target.guard > 0) {
         target.damage = Math.min(999, target.damage + damage * 0.12);
