@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vite-plus/test';
+import { STAGES } from '../src/game/campaign';
 import { GameEngine } from '../src/game/engine';
 import { createCandidates } from '../src/game/loadouts';
 import { EMPTY_INPUT, type InputFrame } from '../src/game/types';
@@ -247,23 +248,25 @@ describe('campaign', () => {
   it('breaks the final boss armor and wins only on its ring-out', () => {
     const game = new GameEngine(8);
     game.start(createCandidates(8).find((candidate) => candidate.weapon === 'pile')!);
-    for (let sector = 0; sector < 2; sector++) {
-      for (let wave = 0; wave < 2; wave++) {
+    for (let sector = 0; sector < STAGES.length - 1; sector++) {
+      for (let wave = 0; wave < STAGES[sector]!.waves.length; wave++) {
         for (const enemy of game.world.enemies) enemy.x = game.world.arenaMax + 6;
         step(game, 90);
       }
       game.nextSector();
     }
-    for (const enemy of game.world.enemies) enemy.x = game.world.arenaMax + 6;
-    step(game, 90);
+    for (let wave = 0; wave < STAGES.at(-1)!.waves.length - 1; wave++) {
+      for (const enemy of game.world.enemies) enemy.x = game.world.arenaMax + 6;
+      step(game, 90);
+    }
     const boss = game.world.enemies.find((enemy) => enemy.kind === 'boss')!;
     expect(boss).toBeDefined();
     expect(boss.armor).toBeGreaterThan(0);
     game.world.mode = 'training'; // Isolate armor/launch mechanics from the boss AI.
     for (let attempt = 0; attempt < 3 && boss.armor > 0; attempt++) {
-      game.world.player.x = 54; game.world.player.z = 0; game.world.player.y = 0;
+      game.world.player.x = game.world.sector * 28 - 2; game.world.player.z = 0; game.world.player.y = 0;
       game.world.player.vx = 0; game.world.player.vy = 0;
-      boss.x = 56; boss.z = 0; boss.y = 0; boss.vx = 0; boss.vy = 0;
+      boss.x = game.world.sector * 28; boss.z = 0; boss.y = 0; boss.vx = 0; boss.vy = 0;
       boss.invulnerable = 0;
       game.update(1 / 60, frame({ smash: true, smashHeld: true }));
       step(game, 53, { smashHeld: true });
@@ -298,7 +301,7 @@ describe('campaign', () => {
     // This player has no world writes, damage overrides, teleports or invincibility.
     // It aligns with lanes, charges smash attacks, jumps telegraphed attacks and
     // uses aerials/recovery. It exercises all gates and the final boss together.
-    for (let tick = 0; tick < 60 * 180; tick++) {
+    for (let tick = 0; tick < 60 * 300; tick++) {
       const w = game.world, p = w.player;
       if (w.phase === 'won' || w.phase === 'lost') break;
       const input = frame();
@@ -336,8 +339,8 @@ describe('campaign', () => {
       game.update(1 / 60, input);
     }
     expect(game.world.phase).toBe('won');
-    expect(game.world.kills).toBe(18);
-    expect(game.world.sector).toBe(2);
+    expect(game.world.kills).toBeGreaterThanOrEqual(STAGES.flatMap((stage) => stage.waves.flatMap((wave) => wave.enemies)).length);
+    expect(game.world.sector).toBe(STAGES.length - 1);
     expect(game.world.stocks).toBeGreaterThan(0);
   });
 });
@@ -347,8 +350,8 @@ describe('enemy tactics', () => {
     const game = new GameEngine(73);
     game.start(createCandidates(73)[0]!);
     const kinds = new Set<string>();
-    for (let sector = 0; sector < 3; sector++) {
-      for (let wave = 0; wave < 2; wave++) {
+    for (let sector = 0; sector < STAGES.length; sector++) {
+      for (let wave = 0; wave < STAGES[sector]!.waves.length; wave++) {
         for (const enemy of game.world.enemies) { kinds.add(enemy.kind); enemy.x = game.world.arenaMax + 6; }
         step(game, 90);
       }

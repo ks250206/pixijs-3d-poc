@@ -17,6 +17,7 @@ import {
 } from '@pixi/3d';
 import { ENEMY_NAMES, type Actor, type ActorKind, type ArenaProp, type Effect, type Projectile, type WorldState } from '../game/types';
 import { attackMotion } from './motion';
+import { STAGES } from '../game/campaign';
 import { RobotView } from './robot';
 import type { RobotAssets } from './robot';
 
@@ -28,6 +29,12 @@ const COLORS: Record<ActorKind, number> = {
   drone: 0xff66ca,
   sentinel: 0x68baff,
   charger: 0xff9050,
+  leaper: 0xf4d36b,
+  artillery: 0xa4b7ff,
+  rider: 0xffa75e,
+  captain: 0xc9ed6a,
+  minion: 0x9bd668,
+  warden: 0xff768f,
   boss: 0xff654d,
 };
 
@@ -57,6 +64,7 @@ interface EffectView {
 interface ProjectileView {
   root: Container3D;
   core: Mesh3D;
+  target: Mesh3D;
 }
 
 /** True 3D scene, with a small Pixi 2D layer for projected combat labels. */
@@ -68,6 +76,7 @@ export class GameScene {
   private readonly labels = new Container();
   private readonly stars = new Graphics();
   private readonly scenery = new Container3D();
+  private readonly stageDecor = new Container3D();
   private readonly actors = new Map<string, ActorView>();
   private readonly effects = new Map<string, EffectView>();
   private readonly projectiles = new Map<string, ProjectileView>();
@@ -150,6 +159,12 @@ export class GameScene {
       drone: this.material(0x8d496f, 0.47, 0.38),
       sentinel: this.material(0x375779, 0.4, 0.6),
       charger: this.material(0xad5134, 0.6, 0.4),
+      leaper: this.material(0xab8d3e, 0.6, 0.3),
+      artillery: this.material(0x62648b, 0.55, 0.4),
+      rider: this.material(0x98653e, 0.5, 0.5),
+      captain: this.material(0x6f8150, 0.5, 0.4),
+      minion: this.material(0x4f7550, 0.7, 0.2),
+      warden: this.material(0x735569, 0.45, 0.6),
       boss: this.material(0x424d60, 0.42, 0.65),
     };
     this.assets = {
@@ -170,6 +185,7 @@ export class GameScene {
     this.warningMaterial = this.material(0xff654d, 0.8, 0, 0.22);
     this.slashGeometry = this.makeSlash();
     this.buildEnvironment();
+    this.scenery.addChild(this.stageDecor);
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(host);
     this.resize();
@@ -509,6 +525,47 @@ export class GameScene {
     return entry;
   }
 
+  private rebuildStage(sector: number): void {
+    for (const child of this.stageDecor.removeChildren()) child.destroy({ children: true });
+    const stage = STAGES[sector]!, g = this.stageDecor;
+    const steel = this.assets.trim, dark = this.assets.joint, glow = this.glow(stage.color);
+    this.accent.baseColor = stage.color;
+    this.reactor.visible = stage.theme === 'foundry' || stage.theme === 'core';
+    if (stage.theme === 'transit') {
+      for (const x of [-5, 0, 5]) {
+        this.box(g, steel, x, 1.5, -5.2, 3.8, 3, 0.9);
+        this.box(g, dark, x, 1.8, -4.72, 3.4, 1.5, 0.08);
+        this.box(g, glow, x, 0.75, -4.65, 3.5, 0.1, 0.06);
+        for (const side of [-1, 1]) this.box(g, glow, x + side, 2, -4.65, 0.8, 0.55, 0.06);
+      }
+    } else if (stage.theme === 'skybridge') {
+      for (const x of [-9, -3, 3, 9]) {
+        this.box(g, steel, x, 3.5, -5, 0.24, 7, 0.3);
+        const cable = this.box(g, glow, x + 1.2, 4.6, -5, 0.04, 5.3, 0.04);
+        cable.rotation.z = -0.5;
+      }
+      this.box(g, steel, 0, 7, -5, 21, 0.3, 0.4);
+      this.box(g, glow, 0, 3.9, -5, 21, 0.04, 0.04);
+    } else if (stage.theme === 'hive') {
+      for (const x of [-8, -4, 0, 4, 8]) {
+        this.mesh(g, this.cylinder, steel, x, 1.65, -5.2, 1.1, 3.3, 0.7);
+        this.box(g, dark, x, 1.7, -4.5, 1.5, 2.6, 0.08);
+        for (const y of [0.7, 1.7, 2.7]) this.box(g, glow, x, y, -4.4, 0.8, 0.15, 0.04);
+      }
+    } else if (stage.theme === 'core') {
+      for (const x of [-8, -5, 5, 8]) {
+        this.box(g, dark, x, 2.8, -5.5, 1.5, 5.6, 1);
+        this.box(g, glow, x, 2.8, -4.95, 0.18, 4.9, 0.05);
+        this.box(g, steel, x, 5.7, -5.5, 2, 0.25, 1.2);
+      }
+    } else {
+      for (const x of [-4, 5]) {
+        this.box(g, steel, x, 2.2, -5.2, 0.45, 4.4, 0.5);
+        this.box(g, glow, x, 1.2, -4.9, 0.18, 1, 0.05);
+      }
+    }
+  }
+
   private updateProps(world: WorldState): void {
     const ids = new Set<string>();
     for (const prop of world.props) {
@@ -593,18 +650,18 @@ export class GameScene {
   private updateActor(actor: Actor, world: WorldState): void {
     const view = this.actors.get(actor.id) ?? this.makeActor(actor);
     view.robot.update(actor, world.time, world.loadout.weapon);
-    const boss = actor.kind === 'boss';
+    const boss = actor.kind === 'boss' || actor.kind === 'warden';
     const point = this.view.worldToScreen({ x: actor.x, y: actor.y + actor.scale * (actor.kind === 'drone' ? 1.6 : boss ? 2.45 : 2.3), z: actor.z });
     view.label.visible = actor.alive && point !== null && world.phase !== 'ready';
     if (point) view.label.position.copyFrom(point);
-    const labelText = `${ENEMY_NAMES[actor.kind]}  ${Math.round(actor.damage)}%${actor.guard > 0 ? `\n▰ GUARD ${Math.ceil(actor.guard)}` : ''}`;
+    const labelText = `${ENEMY_NAMES[actor.kind]}  ${Math.round(actor.damage)}%${actor.guard > 0 ? `\n▰ GUARD ${Math.ceil(actor.guard)}` : actor.mount > 0 ? `\n▰ MOUNT ${Math.ceil(actor.mount)}` : ''}`;
     if (view.label.text !== labelText) view.label.text = labelText;
     view.label.style.fill = actor.damage > 110 ? 0xff695f : actor.damage > 65 ? 0xffc27b : COLORS[actor.kind];
 
     const attack = actor.attack;
     view.slash.visible = view.slashEdge.visible = actor.alive && attack !== null && actor.state === 'attack';
     if (attack) {
-      const style = actor.kind === 'player' ? world.loadout.weapon : actor.kind === 'boss' || actor.kind === 'bruiser' ? 'pile' : 'arc';
+      const style = actor.kind === 'player' ? world.loadout.weapon : actor.kind === 'boss' || actor.kind === 'warden' || actor.kind === 'bruiser' ? 'pile' : 'arc';
       const motion = attackMotion(attack, style);
       const strength = attack.kind === 'smash' ? 1.55 : attack.kind === 'special' ? 1.7 : 1;
       const scale = Math.min(3.8, attack.range * 0.7) * strength * (0.75 + Math.sin(motion.swing * Math.PI) * 0.25);
@@ -619,7 +676,7 @@ export class GameScene {
     view.danger.visible = actor.alive && actor.kind !== 'player' && actor.telegraph > 0 && actor.state === 'attack';
     if (view.danger.visible && attack) {
       const ranged = attack.name.includes('SHOT') || attack.name.includes('LASER');
-      const rush = attack.name === 'RAIL CHARGE' || attack.name === 'SHOCK DIVE';
+      const rush = attack.name === 'RAIL CHARGE' || attack.name === 'SHOCK DIVE' || attack.name === 'RIDER PASS';
       const radial = attack.direction === 'down';
       const length = ranged ? 13 : rush ? 7.5 : radial ? attack.range * 2 : attack.range;
       const angle = ranged && actor.aim ? Math.atan2(actor.aim.z - actor.z, actor.aim.x - actor.x) : actor.facing > 0 ? 0 : Math.PI;
@@ -627,6 +684,12 @@ export class GameScene {
       view.danger.position.set(actor.x + (radial ? 0 : Math.cos(angle) * length / 2), 0.045, actor.z + (radial ? 0 : Math.sin(angle) * length / 2));
       view.danger.scale.set(length, 0.015, width);
       view.danger.rotation.y = -angle;
+      if ((attack.name === 'MORTAR SALVO' || attack.name === 'LEAP STRIKE') && actor.aim) {
+        const radius = attack.name === 'MORTAR SALVO' ? 2.1 : 1.5;
+        view.danger.position.set(actor.aim.x, 0.045, actor.aim.z);
+        view.danger.scale.set(radius * 2, 0.015, radius * 2);
+        view.danger.rotation.y = 0;
+      }
     }
     view.charge.visible = actor.alive && actor.state === 'charge';
     if (view.charge.visible) {
@@ -704,7 +767,9 @@ export class GameScene {
       this.mesh(root, this.sphere, material, 0, 0, 0, 1, 1, 1);
       this.box(root, material, -1.7, 0, 0, 3, 0.24, 0.24);
       this.view.root.addChild(root);
-      entry = { root, core };
+      const target = this.mesh(this.view.root, this.ring, this.glow(0xff9165), 0, 0.065, 0, 2.1, 1, 2.1);
+      target.visible = false;
+      entry = { root, core, target };
       this.projectiles.set(projectile.id, entry);
     }
     const s = Math.max(0.08, projectile.radius);
@@ -712,6 +777,8 @@ export class GameScene {
     entry.root.scale.set(s);
     entry.root.rotation.set(0, 0, Math.atan2(projectile.vy, projectile.vx));
     entry.core.scale.set(0.7 + Math.sin(time * 30) * 0.15);
+    entry.target.visible = projectile.kind === 'mortar' && Boolean(projectile.target);
+    if (projectile.target) entry.target.position.set(projectile.target.x, 0.065, projectile.target.z);
   }
 
   update(world: WorldState, dt: number): void {
@@ -720,7 +787,7 @@ export class GameScene {
       this.currentSector = world.sector;
       this.scenery.position.x = world.sector * 28;
       this.cameraX = world.cameraX;
-      this.accent.baseColor = [0x37dcd2, 0x8e86d5, 0xd8854b][world.sector] ?? 0x37dcd2;
+      this.rebuildStage(world.sector);
     }
     // Snap only on startup; smooth movement follows the engine's arena transition.
     this.cameraX += (world.cameraX - this.cameraX) * Math.min(1, dt * 7);
@@ -768,6 +835,7 @@ export class GameScene {
     for (const [id, entry] of this.projectiles) {
       if (!projectileIds.has(id)) {
         entry.root.destroy({ children: true });
+        entry.target.destroy();
         this.projectiles.delete(id);
       }
     }

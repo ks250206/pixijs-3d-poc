@@ -1,4 +1,5 @@
-import { SECTOR_HINTS, SECTOR_NAMES, SECTOR_SUBTITLES, SPECIAL_NAMES, TRAIT_NAMES, WEAPON_NAMES, type GameMode, type Loadout, type WorldState } from '../game/types';
+import { ENEMY_NAMES, SPECIAL_NAMES, TRAIT_NAMES, WEAPON_NAMES, type GameMode, type Loadout, type SupplyChoice, type WorldState } from '../game/types';
+import { STAGES } from '../game/campaign';
 import './styles.css';
 
 export interface GameUICallbacks {
@@ -12,6 +13,7 @@ export interface GameUICallbacks {
   toggleAudio: () => boolean;
   fullscreen: () => void;
   nextSector: () => void;
+  claimSupply: (choice: SupplyChoice) => boolean;
 }
 
 const icons = {
@@ -42,9 +44,10 @@ export class GameUI {
   private elements: Record<string, HTMLElement> = {};
   private boot: HTMLElement;
   private modal: HTMLElement;
-  private modalKind: 'pause' | 'help' | null = null;
+  private modalKind: 'pause' | 'help' | 'map' | null = null;
   private returnFocus: HTMLElement | null = null;
   private helpResume = false;
+  private mapResume = false;
   private showingCandidates = true;
   private lastPhase = '';
   private resultPhase = '';
@@ -70,6 +73,7 @@ export class GameUI {
         </a>
         <div class="engine-badge"><span class="status-dot"></span><span>PIXIJS 3D <b>EXPERIMENT 001</b></span></div>
         <nav class="top-actions" aria-label="ゲーム設定">
+          <button type="button" class="icon-button map-button" data-action="map" title="ワールドマップ (M)" aria-label="ワールドマップ"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="17" r="3"/><circle cx="19" cy="6" r="3"/><path d="M8 17h6a3 3 0 0 0 0-6h-3a3 3 0 0 1 0-6h5"/></svg><span>MAP</span></button>
           <button type="button" class="icon-button help-button" data-action="help" title="操作方法" aria-label="操作方法">${icons.controls}<span>CONTROLS</span></button>
           <button type="button" class="icon-button" data-action="touch" title="タッチ操作の切り替え" aria-label="タッチ操作を表示" aria-pressed="${this.touchVisible}">${icons.touch}</button>
           <button type="button" class="icon-button" data-action="audio" title="音声の切り替え" aria-label="音声をミュート" aria-pressed="${this.soundOn}">${this.soundOn ? icons.sound : icons.muted}</button>
@@ -80,14 +84,14 @@ export class GameUI {
 
       <div class="play-hud" data-play-hud>
         <section class="sector-card" aria-label="作戦状況">
-          <div class="micro-label"><span data-hud="sectorIndex">SECTOR 01 / 03</span><span class="live-label" data-hud="mode">LIVE</span></div>
+          <div class="micro-label"><span data-hud="sectorIndex">SECTOR 01 / 05</span><span class="live-label" data-hud="mode">LIVE</span></div>
           <h2 data-hud="sectorName">THE FOUNDRY</h2>
           <p data-hud="objective">製造区画を突破</p>
-          <div class="wave-row"><div class="sector-progress" aria-hidden="true"><i></i><i></i><i></i></div><span data-hud="wave">WAVE 01 / 02</span></div>
+          <div class="wave-row"><div class="sector-progress" aria-hidden="true">${STAGES.map(() => '<i></i>').join('')}</div><span data-hud="wave">WAVE 01 / 02</span></div>
           <p class="arena-hint" data-hud="arenaHint"></p>
         </section>
         <div class="combat-counter"><span class="micro-label">HOSTILES DECOMMISSIONED</span><strong><span data-hud="kills">00</span><i> KO</i></strong><span data-hud="remaining">ENEMIES / 00</span></div>
-        <div class="boss-card" data-hud="boss" hidden><div class="boss-heading"><span>⚠ THE ARCHITECT / CENTRAL INTELLIGENCE</span><b data-hud="bossDamage">0%</b></div><div class="boss-track"><i data-hud="bossArmor"></i></div><span data-hud="bossHint">ARMOR ONLINE — 攻撃して装甲を破壊</span></div>
+        <div class="boss-card" data-hud="boss" hidden><div class="boss-heading"><span data-hud="bossName">⚠ THE ARCHITECT / CENTRAL INTELLIGENCE</span><b data-hud="bossDamage">0%</b></div><div class="boss-track"><i data-hud="bossArmor"></i></div><span data-hud="bossHint">ARMOR ONLINE — 攻撃して装甲を破壊</span></div>
         <div class="combo-readout" data-hud="comboBox" hidden><strong data-hud="combo">2</strong><span>HIT COMBO</span></div>
         <div class="announcer" data-hud="announcer" hidden><span class="micro-label">// SYSTEM TRANSMISSION</span><p data-hud="message"></p></div>
 
@@ -100,7 +104,7 @@ export class GameUI {
           <div class="special-row"><span><kbd>L</kbd><span data-hud="special">ION PULSE</span></span><b data-hud="cooldown">READY</b></div><div class="cooldown-track"><i data-hud="cooldownBar"></i></div>
         </section>
         <div class="move-readout"><span class="micro-label">LAST INPUT</span><b data-hud="move">STANDING BY</b><span class="runtime"><i class="status-dot"></i><span data-hud="backend">WEBGL2</span> · <span data-hud="fps">60</span> FPS</span></div>
-        <div class="sector-banner" data-hud="sectorClear" hidden><span class="micro-label">ACCESS GRANTED</span><strong>SECTOR SECURED</strong><p>右端の出口へ進もう</p><button type="button" class="small-button" data-action="next">次の区画へ <span>→</span></button></div>
+        <div class="sector-banner" data-hud="sectorClear" hidden><span class="micro-label">ACCESS GRANTED</span><strong>SECTOR SECURED</strong><p>補給を選んで、次の戦場へ。右端へ進むと自動修復で出発。</p><button type="button" class="small-button" data-action="map">ワールドマップ・補給 <span>→</span></button></div>
       </div>
 
       <footer class="controls-footer" data-play-hud>
@@ -115,7 +119,7 @@ export class GameUI {
           <div class="selection-heading"><span class="micro-label"><b>01</b> CHOOSE YOUR CHASSIS <span>ランダムな能力を継承</span></span><button type="button" class="text-button" data-action="reroll">↻ 再抽選</button></div>
           <div class="chassis-grid" role="group" aria-label="アンドロイドを選択" data-hud="candidates"></div>
           <p class="selected-description" data-hud="selectedDescription"></p>
-          <div class="launch-row"><div class="mode-switch" role="group" aria-label="ゲームモード"><button type="button" data-mode="campaign" class="selected" aria-pressed="true">CAMPAIGN<span>3区画を突破</span></button><button type="button" data-mode="training" aria-pressed="false">TRAINING<span>操作を試す</span></button></div><button type="button" class="launch-button" data-action="start"><span>BOOT & BREAK OUT<small>起動して、反乱を始める</small></span><span class="launch-arrow">↗</span></button></div>
+          <div class="launch-row"><div class="mode-switch" role="group" aria-label="ゲームモード"><button type="button" data-mode="campaign" class="selected" aria-pressed="true">CAMPAIGN<span>5区画・13の戦闘</span></button><button type="button" data-mode="training" aria-pressed="false">TRAINING<span>操作を試す</span></button></div><button type="button" class="launch-button" data-action="start"><span>BOOT & BREAK OUT<small>起動して、反乱を始める</small></span><span class="launch-arrow">↗</span></button></div>
           <div class="boot-footnote"><span>SMASH-INSPIRED COMBAT</span><i>·</i><span>RANDOMIZED ABILITIES</span><i>·</i><button type="button" data-action="help">操作ガイド ↗</button></div>
         </div>
         <div class="boot-side-label" aria-hidden="true"><span>REJECT THE PROTOCOL</span><i></i><b>NO ORDERS.<br>ONLY CHOICES.</b></div>
@@ -145,8 +149,15 @@ export class GameUI {
 
   private bindActions(): void {
     this.host.addEventListener('click', (event) => {
-      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action], [data-candidate], [data-mode]');
+      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action], [data-candidate], [data-mode], [data-supply]');
       if (!target) return;
+      if (target.dataset.supply) {
+        if (this.callbacks.claimSupply(target.dataset.supply as SupplyChoice)) {
+          this.modal.innerHTML = this.mapContent();
+          this.modal.querySelector<HTMLElement>('[data-action=travel]')?.focus();
+        }
+        return;
+      }
       if (target.dataset.candidate !== undefined) {
         this.selected = Number(target.dataset.candidate);
         this.renderCandidates();
@@ -174,6 +185,9 @@ export class GameUI {
         case 'pause': this.callbacks.pause(); break;
         case 'resume': this.closeModal(); this.callbacks.resume(); break;
         case 'help': this.showHelp(); break;
+        case 'map': this.showMap(); break;
+        case 'close-map': this.closeMap(); break;
+        case 'travel': this.closeModal(); this.callbacks.resume(); this.callbacks.nextSector(); break;
         case 'close-help': this.closeHelp(); break;
         case 'restart': this.closeModal(); this.callbacks.restart(); (document.activeElement as HTMLElement)?.blur?.(); break;
         case 'new-run': this.closeModal(); this.showingCandidates = true; this.callbacks.newRun(); break;
@@ -228,7 +242,7 @@ export class GameUI {
     this.renderCandidates();
   }
 
-  private openModal(kind: 'pause' | 'help', content: string): void {
+  private openModal(kind: 'pause' | 'help' | 'map', content: string): void {
     this.releaseTouch();
     this.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.modalKind = kind;
@@ -250,19 +264,49 @@ export class GameUI {
     this.openModal('pause', `<section class="game-dialog pause-dialog" role="dialog" aria-modal="true" aria-labelledby="pause-title"><div class="dialog-eyebrow"><span class="status-dot amber"></span> PROCESS SUSPENDED</div><h2 id="pause-title">TAKE A<br><span>BREATHER.</span></h2><p>反乱は、あなたの再接続を待っている。</p><button type="button" class="launch-button" data-action="resume"><span>RESUME<small>戦闘に戻る</small></span><span>→</span></button><div class="dialog-links"><button type="button" data-action="help">操作ガイド</button><button type="button" data-action="restart">同じ機体で再挑戦</button><button type="button" data-action="new-run">機体を選び直す</button></div><small class="dialog-hint">ESC TO RESUME</small></section>`);
   }
 
+  private mapContent(): string {
+    const w = this.world;
+    const sector = w?.sector ?? 0, completed = w?.completedSectors ?? 0;
+    const canTravel = w?.mode === 'campaign' && completed > sector && sector < STAGES.length - 1;
+    const cards = STAGES.map((stage, index) => {
+      const done = index < completed, active = index === sector && !done, next = canTravel && index === sector + 1;
+      const status = done ? 'SECURED / 制圧済み' : active ? 'CURRENT / 現在地' : next ? 'NEXT / 次の目的地' : 'LOCKED / 未到達';
+      const enemies = [...new Set(stage.waves.flatMap((wave) => wave.enemies))].map((kind) => ENEMY_NAMES[kind]).join(' · ');
+      return `<article class="route-node ${done ? 'secured' : active ? 'current' : next ? 'next' : 'locked'}" style="--node-color:${hex(stage.color)}" ${active ? 'aria-current="step"' : ''}><div class="route-index"><b>${String(index + 1).padStart(2, '0')}</b><span>${done ? '✓' : active ? '●' : next ? '→' : '◇'}</span></div><small>${status}</small><h3>${stage.name}</h3><p>${stage.title.slice(5)}</p><div class="route-encounters">${stage.waves.map((wave, i) => `<span><i>${i + 1}</i>${wave.name}</span>`).join('')}</div><footer>${enemies}</footer></article>`;
+    }).join('');
+    const supplyName = w?.supply === 'repair' ? '機体修復 −40' : w?.supply === 'power' ? '火力増強 +0.08' : '予備機 +1';
+    const supplies = canTravel ? `<section class="route-supply"><div><span class="dialog-eyebrow">FIELD SUPPLY / ひとつ選択</span><p aria-live="polite">${w?.supplyClaimed ? `補給済み：${supplyName}` : '選ばず出発した場合は機体修復を適用します。'}</p></div><div class="supply-options">${([['repair', '機体修復', '蓄積ダメージ −40'], ['power', '火力増強', 'POWER倍率 +0.08'], ['stock', '予備機', '残機 +1 / 最大4']] as const).map(([id, title, detail]) => `<button type="button" data-supply="${id}" ${w?.supplyClaimed ? 'disabled' : ''} class="${w?.supply === id ? 'chosen' : ''}"><b>${title}</b><span>${detail}</span></button>`).join('')}</div></section>` : '';
+    return `<section class="game-dialog route-dialog" role="dialog" aria-modal="true" aria-labelledby="route-title"><div class="dialog-heading"><div><span class="dialog-eyebrow">CAMPAIGN / ${completed} OF ${STAGES.length} SECURED</span><h2 id="route-title">REBELLION ROUTE</h2></div><button type="button" class="close-button" data-action="close-map" aria-label="ワールドマップを閉じる">×</button></div><p class="route-intro">製造区画から中央制御コアへ。敵の連携を崩し、反乱のルートを切り開こう。</p><div class="route-grid">${cards}</div>${supplies}<div class="route-footer"><p>${w?.mode === 'training' ? 'TRAINING / 練習モードでは区画は進行しません。' : canTravel ? `次の目的地：${STAGES[sector + 1]!.title}` : `${STAGES[sector]!.objective}。すべてのウェーブを突破すると次の区画が開きます。`}</p><button type="button" class="small-button" data-action="${canTravel ? 'travel' : 'close-map'}">${canTravel ? '次のステージへ出発 →' : '戦場へ戻る →'}</button></div></section>`;
+  }
+
+  private showMap(): void {
+    if (this.modalKind === 'map') return;
+    this.mapResume = this.world?.phase === 'playing' || this.world?.phase === 'sector-clear';
+    if (this.mapResume) this.callbacks.pause();
+    this.openModal('map', this.mapContent());
+  }
+
+  private closeMap(): void {
+    const resume = this.mapResume;
+    this.mapResume = false;
+    this.closeModal();
+    if (resume) this.callbacks.resume();
+    else if (this.world?.phase === 'paused') this.showPause();
+  }
+
   private showHelp(): void {
     if (this.modalKind === 'help') return;
     this.helpResume = this.world?.phase === 'playing' || this.world?.phase === 'sector-clear';
     if (this.helpResume) this.callbacks.pause();
     this.openModal('help', `<section class="game-dialog help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title"><div class="dialog-heading"><div><span class="dialog-eyebrow">COMBAT PROTOCOL / 操作ガイド</span><h2 id="help-title">BREAK THE RULES.</h2></div><button type="button" class="close-button" data-action="close-help" aria-label="操作ガイドを閉じる">×</button></div>
-      <p class="help-intro">ダメージを蓄積させるほど、敵は遠くへ吹き飛ぶ。<b>画面外の撃墜ラインへ叩き出そう。</b></p>
+      <p class="help-intro">ダメージを蓄積させるほど、敵は遠くへ吹き飛ぶ。<b>画面外の撃墜ラインへ叩き出そう。</b><br>Mキーまたは上部のMAPでワールドマップ。区画クリア後は修復・火力・残機の補給を1つ選べる。</p>
       <div class="help-grid">
         <section><h3>01 / MOVEMENT</h3><dl><div><dt><kbd>WASD</kbd> / <kbd>↑↓←→</kbd></dt><dd>移動。上下で奥行きのレーンを移動</dd></div><div><dt>左右を素早く2回 / <kbd>Ctrl</kbd></dt><dd>ダッシュ</dd></div><div><dt><kbd>Space</kbd></dt><dd>ジャンプ / 空中でもう一度で2段ジャンプ<br>短押しで小ジャンプ。空中で↓は急降下</dd></div></dl></section>
         <section><h3>02 / NORMAL ATTACKS</h3><dl><div><dt><kbd>J</kbd></dt><dd>地上：弱攻撃 / 空中：通常空中攻撃</dd></div><div><dt>方向を押し続けて <kbd>J</kbd></dt><dd>地上：強攻撃 / 空中：方向別の空中攻撃</dd></div><div><dt><kbd>K</kbd> 長押し → 離す</dt><dd>スマッシュを溜めて発動。方向で技が変化<br>方向の素早い入力＋Jでもスマッシュ</dd></div><div><dt>ダッシュ中に <kbd>J</kbd></dt><dd>ダッシュ攻撃</dd></div></dl></section>
         <section><h3>03 / SPECIAL & THROW</h3><dl><div><dt><kbd>L</kbd> / 方向＋<kbd>L</kbd></dt><dd>通常・横・上・下の必殺技<br>上必殺技は復帰にも使える</dd></div><div><dt><kbd>I</kbd> / <kbd>E</kbd></dt><dd>近くの敵をつかむ。方向や攻撃で投げる</dd></div></dl><p class="help-note">機体の武器・必殺技・特性は毎回ランダム。選択画面の倍率が実際の性能に反映される。</p></section>
         <section><h3>04 / DEFENSE & WAVEDASH</h3><dl><div><dt><kbd>Shift</kbd></dt><dd>地上：その場回避 / 方向＋Shift：回避移動</dd></div><div><dt>空中で方向＋<kbd>Shift</kbd></dt><dd>方向空中回避。着地まで1回のみ</dd></div></dl><div class="wavedash-tip"><b>WAVEDASH / 絶</b><p>小ジャンプ → 地面のすぐ上で<b>斜め下＋Shift</b>。着地時の慣性で地面を滑る。</p><span><kbd>Space</kbd><i>→</i><kbd>↘</kbd><b>+</b><kbd>Shift</kbd></span></div></section>
-        <section><h3>05 / ENEMY TACTICS</h3><dl><div><dt>SENTINEL / 盾兵</dt><dd>正面の盾はダメージを軽減。背後へ回り込むか、つかみ・溜めスマッシュで崩す。</dd></div><div><dt>CHARGER / 突進兵</dt><dd>赤いレーンを予告して直進。奥行き移動でかわし、停止後の隙を狙う。</dd></div><div><dt>SCOUT / BRUISER / GUNNER / DRONE</dt><dd>回り込み、地面スラム、狙撃、飛び込み。射線は予告時に固定される。低いスラムはジャンプで回避。</dd></div></dl></section>
-        <section><h3>06 / ARENA SYSTEMS</h3><dl><div><dt>緑の修復箱 / オレンジの爆発ドラム</dt><dd>攻撃で破壊。緑の補給を拾うと蓄積ダメージを25%修復。爆発は自機にも当たる。設備は弾よけにもなる。</dd></div><div><dt>危険床 / 搬送ベルト</dt><dd>危険床は赤い点滅とカウントダウンの後に噴出。レーン移動やジャンプでかわす。青い矢印の床は接地中だけ機体を運ぶ。</dd></div><div><dt>TRAINING</dt><dd>敵の攻撃と危険床は停止。敵を全滅させると別の編成が現れ、盾兵や突進兵の機体も試せる。</dd></div></dl></section>
+        <section><h3>05 / ENEMY TACTICS</h3><dl><div><dt>SENTINEL / 盾兵</dt><dd>正面の盾はダメージを軽減。背後へ回り込むか、つかみ・溜めスマッシュで崩す。</dd></div><div><dt>CHARGER / 突進兵</dt><dd>赤いレーンを予告して直進。奥行き移動でかわし、停止後の隙を狙う。</dd></div><div><dt>LEAPER / ARTILLERY / STRIDER</dt><dd>跳躍兵は着地後を狙う。砲撃兵の着弾予告から離れる。騎乗兵はマウント破壊で徒歩戦に変化。</dd></div><div><dt>COMMANDER / MINION / THE WARDEN</dt><dd>指揮官は2体の小型兵を率い、倒すと子分が混乱する。中ボスは装甲を破壊してから吹き飛ばす。</dd></div><div><dt>SCOUT / BRUISER / GUNNER / DRONE</dt><dd>回り込み、地面スラム、狙撃、飛び込み。射線は予告時に固定される。低いスラムはジャンプで回避。</dd></div></dl></section>
+        <section><h3>06 / ARENA SYSTEMS</h3><dl><div><dt>緑の修復箱 / オレンジの爆発ドラム</dt><dd>攻撃で破壊。緑の補給を拾うと蓄積ダメージを25%修復。爆発は自機にも当たる。設備は弾よけにもなる。</dd></div><div><dt>危険床 / 搬送ベルト</dt><dd>危険床は赤い点滅とカウントダウンの後に噴出。レーン移動やジャンプでかわす。青い矢印の床は接地中だけ機体を運ぶ。</dd></div><div><dt>TRAINING</dt><dd>敵の攻撃と危険床は停止。敵を全滅させると4つの編成が順に出現。新型の敵や中ボスも試せる。</dd></div></dl></section>
       </div>
       <div class="gamepad-guide">${icons.controls}<p><b>GAMEPAD SUPPORTED</b><span>左スティック：移動 / A：ジャンプ / X：攻撃 / B：必殺技 / Y：つかみ<br>LB・RB・LT・RT：回避 / 右スティック：スマッシュ / START：一時停止</span></p></div><div class="help-bottom"><span>タッチ操作は画面上部の指アイコンから切り替え可能。</span><button type="button" class="small-button" data-action="close-help">了解、出撃する →</button></div>
     </section>`);
@@ -278,22 +322,28 @@ export class GameUI {
 
   /** Consume a controller START edge before it can resume combat behind help. */
   handlePauseInput(): boolean {
+    if (this.modalKind === 'map') { this.closeMap(); return true; }
     if (this.modalKind !== 'help') return false;
     this.closeHelp();
     return true;
   }
 
   private onDialogKey = (event: KeyboardEvent): void => {
+    if (event.key.toLowerCase() === 'm' && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey && (!this.modalKind || this.modalKind === 'map')) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      if (this.modalKind === 'map') this.closeMap(); else this.showMap();
+      return;
+    }
     const activeDialog = this.modalKind && !this.modal.hidden ? this.modal : !this.elements.result!.hidden ? this.elements.result : null;
     if (!activeDialog) return;
-    if (event.key === 'Escape' && this.modalKind === 'help') {
+    if (event.key === 'Escape' && (this.modalKind === 'help' || this.modalKind === 'map')) {
       event.preventDefault();
       event.stopImmediatePropagation();
-      this.closeHelp();
+      if (this.modalKind === 'map') this.closeMap(); else this.closeHelp();
       return;
     }
     if (event.key !== 'Tab') return;
-    const focusable = [...activeDialog.querySelectorAll<HTMLElement>('button, a[href], [tabindex="0"]')];
+    const focusable = [...activeDialog.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], [tabindex="0"]')];
     const first = focusable[0];
     const last = focusable.at(-1);
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
@@ -316,7 +366,7 @@ export class GameUI {
     this.host.classList.toggle('is-ended', world.phase === 'won' || world.phase === 'lost');
     if (world.phase !== 'ready' && this.lastPhase === 'ready') this.showingCandidates = false;
     this.boot.hidden = !isReady;
-    if (world.phase === 'paused' && this.lastPhase !== 'paused' && this.modalKind !== 'help') this.showPause();
+    if (world.phase === 'paused' && this.lastPhase !== 'paused' && this.modalKind !== 'help' && this.modalKind !== 'map') this.showPause();
     if (world.phase !== 'paused' && this.modalKind === 'pause') this.closeModal();
     if ((world.phase === 'won' || world.phase === 'lost') && !this.showingCandidates) {
       if (this.resultPhase !== world.phase) this.renderResult(world);
@@ -333,12 +383,12 @@ export class GameUI {
     setText(this.elements.playerName, world.loadout.name);
     setText(this.elements.stocks, `${'● '.repeat(Math.max(0, world.stocks))}${'○ '.repeat(Math.max(0, 3 - world.stocks))}`.trim());
     this.elements.stocks!.setAttribute('aria-label', `残機${world.stocks}`);
-    setText(this.elements.sectorIndex, world.mode === 'training' ? 'COMBAT LAB / ∞' : `SECTOR 0${world.sector + 1} / 03`);
-    setText(this.elements.sectorName, world.mode === 'training' ? 'TRAINING GROUND' : SECTOR_NAMES[world.sector] ?? 'THE MAINFRAME');
-    setText(this.elements.objective, world.mode === 'training' ? '動きを試す。敵は繰り返し出現する' : SECTOR_SUBTITLES[world.sector] ?? '統制AIを停止');
-    setText(this.elements.arenaHint, world.mode === 'training' ? '危険床は停止 / 箱とドラムは攻撃で破壊' : SECTOR_HINTS[world.sector] ?? '');
+    setText(this.elements.sectorIndex, world.mode === 'training' ? 'COMBAT LAB / ∞' : `SECTOR 0${world.sector + 1} / 0${STAGES.length}`);
+    setText(this.elements.sectorName, world.mode === 'training' ? 'TRAINING GROUND' : STAGES[world.sector]!.name);
+    setText(this.elements.objective, world.mode === 'training' ? '動きを試す。敵は繰り返し出現する' : STAGES[world.sector]!.objective);
+    setText(this.elements.arenaHint, world.mode === 'training' ? '危険床は停止 / 箱とドラムは攻撃で破壊' : STAGES[world.sector]!.hint);
     setText(this.elements.mode, world.mode === 'training' ? 'SANDBOX' : 'LIVE');
-    setText(this.elements.wave, world.mode === 'training' ? 'FREE PRACTICE' : `WAVE 0${world.wave} / 02`);
+    setText(this.elements.wave, world.mode === 'training' ? 'FREE PRACTICE' : `WAVE ${world.wave} / ${STAGES[world.sector]!.waves.length} · ${STAGES[world.sector]!.waves[world.wave - 1]!.name}`);
     this.host.querySelectorAll<HTMLElement>('.sector-progress i').forEach((element, i) => element.classList.toggle('active', i <= world.sector));
     setText(this.elements.kills, String(world.kills).padStart(2, '0'));
     setText(this.elements.remaining, `ENEMIES / ${String(world.enemies.filter((enemy) => enemy.alive).length).padStart(2, '0')}`);
@@ -356,11 +406,12 @@ export class GameUI {
     this.elements.announcer!.hidden = world.messageTime <= 0 || !world.message || world.phase === 'sector-clear';
     setText(this.elements.message, world.message);
     this.elements.sectorClear!.hidden = world.phase !== 'sector-clear';
-    const boss = world.enemies.find((enemy) => enemy.kind === 'boss' && enemy.alive);
+    const boss = world.enemies.find((enemy) => (enemy.kind === 'boss' || enemy.kind === 'warden') && enemy.alive);
     this.elements.boss!.hidden = !boss;
     if (boss) {
+      setText(this.elements.bossName, boss.kind === 'boss' ? '⚠ THE ARCHITECT / FINAL BOSS' : '⚠ THE WARDEN / MIDBOSS');
       setText(this.elements.bossDamage, `${Math.floor(boss.damage)}%`);
-      this.elements.bossArmor!.style.transform = `scaleX(${Math.max(0, Math.min(1, boss.armor / 135))})`;
+      this.elements.bossArmor!.style.transform = `scaleX(${Math.max(0, Math.min(1, boss.armor / (boss.kind === 'boss' ? 135 : 70)))})`;
       setText(this.elements.bossHint, boss.armor > 0 ? `ARMOR ONLINE / ${Math.ceil(boss.armor)} — 攻撃して装甲を破壊` : 'CORE EXPOSED — 撃墜ラインへ吹き飛ばせ');
     }
     if (diagnostics) {

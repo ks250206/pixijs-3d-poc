@@ -105,6 +105,74 @@ test('compatibility mode renders the arena without floating-point environment li
   await expectRenderedArena(page);
 });
 
+test('world map pauses combat, shows five stages, and resumes with Escape', async ({ page }) => {
+  await boot(page);
+  await page.locator('[data-action=start]').click();
+  await page.locator('.top-actions [data-action=map]').click();
+  await expect(page.getByRole('dialog', { name: 'REBELLION ROUTE' })).toBeVisible();
+  await expect(page.locator('.route-node')).toHaveCount(5);
+  expect((await snapshot(page)).phase).toBe('paused');
+  const time = (await snapshot(page)).time;
+  await page.waitForTimeout(120);
+  expect((await snapshot(page)).time).toBe(time);
+  await page.screenshot({ path: 'test-results/screenshots/06-world-map.png' });
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toBeHidden();
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('playing');
+});
+
+test('cleared-stage supplies apply once and route departure enters the next stage', async ({ page }) => {
+  await boot(page);
+  await page.locator('[data-action=start]').click();
+  await page.evaluate(() => {
+    const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; update: (dt: number) => void } } }).__UPRISING__.engine;
+    for (let wave = 0; wave < 2; wave++) {
+      engine.world.enemies.forEach((enemy) => { enemy.x = engine.world.arenaMax + 6; });
+      for (let i = 0; i < 100; i++) engine.update(1 / 60);
+    }
+  });
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('sector-clear');
+  const power = (await snapshot(page)).loadout.power;
+  await page.locator('[data-hud=sectorClear] [data-action=map]').click();
+  await page.locator('[data-supply=power]').click();
+  await expect(page.locator('[data-supply=stock]')).toBeDisabled();
+  expect((await snapshot(page)).loadout.power).toBeCloseTo(power + 0.08);
+  await page.locator('[data-action=travel]').click();
+  await expect.poll(async () => (await snapshot(page)).sector).toBe(1);
+  await expect(page.getByRole('dialog')).toBeHidden();
+  expect((await snapshot(page)).phase).toBe('playing');
+});
+
+test('renders the expanded roster and distinct stage scenery', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await training(page);
+  for (const sector of [1, 2, 3, 4]) {
+    await page.evaluate(() => {
+      const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; nextSector: () => void } } }).__UPRISING__.engine;
+      engine.world.mode = 'campaign'; engine.world.phase = 'sector-clear'; engine.nextSector();
+      engine.world.mode = 'training';
+      engine.world.enemies.forEach((enemy) => { enemy.invulnerable = 0; });
+      engine.world.player.invulnerable = 0;
+    });
+    await expect.poll(async () => (await snapshot(page)).sector).toBe(sector);
+    await expectRenderedArena(page);
+    await page.screenshot({ path: `test-results/screenshots/stage-${sector + 1}.png` });
+  }
+  for (let wave = 2; wave <= 4; wave++) {
+    await page.evaluate(() => {
+      const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; update: (dt: number) => void } } }).__UPRISING__.engine;
+      engine.world.enemies.forEach((enemy) => { enemy.x = engine.world.arenaMax + 6; });
+      for (let i = 0; i < 100; i++) engine.update(1 / 60);
+      engine.world.enemies.forEach((enemy) => { enemy.invulnerable = 0; });
+    });
+    await expect.poll(async () => (await snapshot(page)).wave).toBe(wave);
+    await expectRenderedArena(page);
+    if (wave > 2) await page.screenshot({ path: `test-results/screenshots/roster-${wave}.png` });
+  }
+  expect(errors).toEqual([]);
+});
+
 test('shows a clear requirement when the browser has no GPU rendering backend', async ({ page }) => {
   await page.addInitScript(() => {
     const original = HTMLCanvasElement.prototype.getContext;
@@ -168,6 +236,11 @@ test('touch controls work in landscape and menu fits portrait', async ({ browser
   await expect.poll(async () => (await snapshot(page)).lastMove).toBe('JUMP');
   await page.screenshot({ path: 'test-results/screenshots/03-mobile-landscape.png' });
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('.top-actions [data-action=map]').click();
+  await expect(page.getByRole('dialog', { name: 'REBELLION ROUTE' })).toBeVisible();
+  expect(await page.getByRole('dialog').evaluate((element) => element.scrollWidth <= element.clientWidth + 2)).toBe(true);
+  await page.screenshot({ path: 'test-results/screenshots/07-mobile-map.png' });
+  await page.getByRole('button', { name: 'ワールドマップを閉じる' }).click();
   await page.locator('[data-action=pause]').click();
   await page.locator('[data-action=new-run]').click();
   await expect(page.locator('[data-action=start]')).toBeVisible();
