@@ -22,6 +22,17 @@ export function createArena(sector: number): ArenaProp[] {
     add('crate', -5, 3.3);
     add('barrel', 4, -3.3);
     add('vent', 6, 0, 2.4, 1.6);
+  } else if (sector === 2) {
+    add('crate', -5, 2.8);
+    add('barrel', 4, -2.8);
+    add('conveyor', 0, 0, 8, 1.4, -1);
+    add('vent', 7, 2.8, 2, 1.5);
+  } else if (sector === 3) {
+    add('crate', -4, -3);
+    add('crate', 5, 3);
+    add('barrel', 2, -2.5);
+    add('barrel', 4, -2.5);
+    add('vent', -1, 2.6, 3.4, 1.5);
   } else {
     add('crate', 4, -3.1);
     add('barrel', -5, 2.8);

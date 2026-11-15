@@ -42,6 +42,8 @@ export class RobotView {
   private readonly fist = new Container3D();
   private readonly offhand = new Container3D();
   private readonly guardPlate = new Container3D();
+  private readonly mount = new Container3D();
+  private readonly mountLegs: Container3D[] = [];
   private readonly parts: { mesh: Mesh3D; material: Material3D }[] = [];
   private readonly rotors: Container3D[] = [];
   private flashed = false;
@@ -123,7 +125,7 @@ export class RobotView {
   }
 
   private buildHumanoid(armor: Material3D, glow: Material3D): void {
-    const boss = this.kind === 'boss';
+    const boss = this.kind === 'boss' || this.kind === 'warden';
     const heavy = boss || this.kind === 'bruiser' || this.kind === 'sentinel';
     const width = boss ? 1.12 : heavy ? 0.86 : 0.64;
     const a = this.assets;
@@ -205,6 +207,42 @@ export class RobotView {
     } else if (this.kind === 'bruiser') {
       this.box(this.rightArm, a.trim, 0, -0.73, 0.2, 0.7, 0.6, 0.7);
       this.box(this.rightArm, glow, 0, -0.73, 0.57, 0.5, 0.12, 0.04, false);
+    } else if (this.kind === 'leaper') {
+      for (const leg of [this.leftLeg, this.rightLeg]) {
+        this.box(leg, a.trim, 0, -0.47, -0.17, 0.34, 0.35, 0.3);
+        for (const y of [-0.3, -0.42, -0.54]) this.box(leg, glow, 0, y, -0.34, 0.3, 0.04, 0.06, false);
+      }
+      this.box(this.head, glow, 0, 0.3, -0.1, 0.12, 0.48, 0.24, false);
+    } else if (this.kind === 'artillery') {
+      this.box(this.body, a.trim, 0, 0.25, -0.45, 0.9, 0.8, 0.5);
+      for (const x of [-0.28, 0.28]) {
+        const tube = new Mesh3D({ geometry: a.cylinder, material: armor, castShadow: false });
+        tube.position.set(x, 0.95, -0.2); tube.scale.set(0.23, 1.15, 0.23); tube.rotation.x = 0.5;
+        this.body.addChild(tube); this.parts.push({ mesh: tube, material: armor });
+        this.ball(this.body, glow, x, 1.48, 0.07, 0.14);
+      }
+    } else if (this.kind === 'captain') {
+      this.box(this.body, a.trim, -0.3, 0.9, -0.4, 0.08, 1.8, 0.08);
+      this.box(this.body, glow, 0, 1.48, -0.4, 0.7, 0.5, 0.06, false);
+      this.box(this.body, armor, 0, 1.48, -0.35, 0.5, 0.25, 0.06);
+      this.box(this.head, glow, 0, 0.25, 0, 0.62, 0.11, 0.22, false);
+    } else if (this.kind === 'minion') {
+      this.box(this.head, glow, 0, 0.25, 0, 0.7, 0.12, 0.25, false);
+      this.box(this.body, a.trim, 0, 0.24, -0.3, 0.45, 0.6, 0.22);
+    } else if (this.kind === 'rider') {
+      this.root.addChild(this.mount);
+      this.box(this.mount, a.trim, 0, 0.67, 0, 0.95, 0.5, 1.8);
+      this.box(this.mount, armor, 0, 1.02, 0.7, 0.6, 0.65, 0.6);
+      this.box(this.mount, armor, 0, 1.22, 1.05, 0.55, 0.3, 0.7);
+      this.box(this.mount, glow, 0, 1.25, 1.42, 0.35, 0.08, 0.04, false);
+      for (const x of [-0.4, 0.4]) for (const z of [-0.6, 0.65]) {
+        const leg = new Container3D(); leg.position.set(x, 0.55, z);
+        this.box(leg, armor, 0, -0.2, 0, 0.2, 0.5, 0.25);
+        this.box(leg, a.trim, 0, -0.47, 0.1, 0.3, 0.12, 0.45);
+        this.mount.addChild(leg); this.mountLegs.push(leg);
+      }
+      this.box(this.rightArm, a.white, 0, -0.7, 0.9, 0.08, 0.08, 2.1, false);
+      this.box(this.rightArm, glow, 0, -0.7, 1.98, 0.18, 0.15, 0.3, false);
     }
 
     if (this.kind === 'player') {
@@ -294,9 +332,13 @@ export class RobotView {
     }
 
     const running = actor.state === 'run';
+    const mounted = this.kind === 'rider' && actor.mount > 0;
+    this.mount.visible = mounted;
     const stride = Math.sin(time * (this.kind === 'boss' ? 8 : 16));
     const breathe = Math.sin(time * 2.3) * 0.02;
-    this.body.position.y = 0.95 + breathe + (running ? Math.abs(stride) * 0.055 : 0);
+    this.body.position.y = 0.95 + (mounted ? 0.5 : 0) + breathe + (running ? Math.abs(stride) * 0.055 : 0);
+    this.leftLeg.y = this.rightLeg.y = 0.88 + (mounted ? 0.5 : 0);
+    this.mountLegs.forEach((leg, index) => { leg.rotation.x = Math.sin(time * 18 + index * Math.PI) * Math.min(0.6, Math.abs(actor.vx) * 0.08); });
     this.body.rotation.set(0, 0, 0);
     this.head.rotation.set(0, 0, 0);
     this.leftArm.rotation.set(running ? stride * 0.65 : -0.07, 0, 0.08);
@@ -323,7 +365,7 @@ export class RobotView {
         break;
       case 'attack': {
         if (!actor.attack) break;
-        const style = this.kind === 'player' ? weapon : this.kind === 'bruiser' || this.kind === 'boss' ? 'pile' : this.kind === 'scout' ? 'arc' : 'razor';
+        const style = this.kind === 'player' ? weapon : this.kind === 'bruiser' || this.kind === 'boss' || this.kind === 'warden' ? 'pile' : this.kind === 'scout' ? 'arc' : 'razor';
         const pose = attackMotion(actor.attack, style);
         const blend = (rest: number, target: number) => rest + (target - rest) * pose.weight;
         this.body.rotation.set(pose.bodyX * pose.weight, pose.bodyY * pose.weight, 0);
@@ -370,6 +412,7 @@ export class RobotView {
       this.leftArm.rotation.x = -0.35;
       this.body.rotation.y = 0.25;
     }
+    if (mounted) { this.leftLeg.rotation.x = -0.85; this.rightLeg.rotation.x = -0.85; }
   }
 
   destroy(): void {

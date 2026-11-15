@@ -79,6 +79,7 @@ async function main() {
       else void document.documentElement.requestFullscreen?.().catch(() => {});
     },
     nextSector: () => engine.nextSector(),
+    claimSupply: (choice) => engine.claimSupply(choice),
   }, candidates);
 
   const unlock = () => audio.unlock();
