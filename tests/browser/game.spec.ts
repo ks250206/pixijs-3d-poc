@@ -34,15 +34,15 @@ async function snapshot(page: Page): Promise<WorldState> {
   return page.evaluate(() => (window as unknown as { __UPRISING__: { snapshot: () => WorldState } }).__UPRISING__.snapshot());
 }
 
-async function boot(page: Page) {
-  await page.goto('./?seed=73&debug=1');
+async function boot(page: Page, quality: 'default' | 'compat' = 'default') {
+  await page.goto(`./?seed=73&debug=1${quality === 'compat' ? '&quality=compat' : ''}`);
   await expect(page.locator('#boot')).toHaveCount(0);
   await expect(page.locator('#scene canvas')).toBeVisible();
   await expect(page.locator('[data-candidate]')).toHaveCount(6);
 }
 
-async function training(page: Page) {
-  await boot(page);
+async function training(page: Page, quality: 'default' | 'compat' = 'default') {
+  await boot(page, quality);
   await page.locator('[data-mode=training]').click();
   await page.locator('[data-action=start]').click();
   await expect.poll(async () => (await snapshot(page)).phase).toBe('playing');
@@ -194,11 +194,12 @@ test('cleared-stage supplies apply once and route departure enters the next stag
 });
 
 test('renders the expanded roster and distinct stage scenery', async ({ page }) => {
-  // The extended route gets more time, using the shared CI desktop viewport.
+  // Structural loops use explicit compatibility rendering; default/compat/graphics pixel tests retain their own modes.
+  // Every stage and roster still renders and passes the actual-canvas pixel assertion.
   if (process.env.CI) test.setTimeout(240_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await training(page);
+  await training(page, 'compat');
   for (const sector of [1, 2, 3, 4, 5, 6]) {
     await page.evaluate(() => {
       const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; nextSector: () => void } } }).__UPRISING__.engine;
@@ -226,11 +227,11 @@ test('renders the expanded roster and distinct stage scenery', async ({ page }) 
 });
 
 test('selects and plays each new fighting style with its own attack', async ({ page }) => {
-  // Three complete flows use the shared CI desktop viewport and a longer timeout.
+  // Preserve all three selection/play flows in one context with explicit compatibility rendering.
   if (process.env.CI) test.setTimeout(240_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await boot(page);
+  await boot(page, 'compat');
   for (const [weapon, move] of [['lance', 'LANCE'], ['cannon', 'CANNON SHOT'], ['scythe', 'ORBIT']]) {
     await page.locator(`[data-weapon=${weapon}]`).click();
     await expect(page.locator(`[data-weapon=${weapon}]`)).toHaveAttribute('aria-pressed', 'true');
@@ -382,7 +383,7 @@ test('touch controls work in landscape and menu fits portrait', async ({ browser
 
 test('lance mesh tip, trail and debug segment match authoritative world geometry', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
-  await boot(page); await page.locator('[data-weapon=lance]').click();
+  await boot(page, 'compat'); await page.locator('[data-weapon=lance]').click();
   await expect(page.locator('[data-hud=selectedDescription]')).toContainText('上L: RISING CIRCUIT');
   await page.locator('[data-mode=training]').click(); await page.locator('[data-action=start]').click();
   await page.locator('[data-action=hitboxes]').click();
@@ -400,7 +401,7 @@ test('lance mesh tip, trail and debug segment match authoritative world geometry
         const target=(move.frames.startup+move.frames.active*fraction)/60;
         engine.world.hitstop=0;
         while(p.attack!.elapsed<target-1e-8) engine.update(Math.min(1/60,target-p.attack!.elapsed),empty);
-        engine.world.hitstop=100; scene.update(engine.world,0); scene.app.render();
+        engine.world.hitstop=100; scene.update(engine.world,0);
         samples.push({ player:JSON.parse(JSON.stringify(p)), geometry:scene.combatGeometry(p.id) });
       }
       return samples;
@@ -422,7 +423,7 @@ test('lance mesh tip, trail and debug segment match authoritative world geometry
 });
 
 test('shows rolled module details, ground dash label, objectives and phase two indicators', async ({ page }) => {
-  await training(page);
+  await training(page, 'compat');
   await expect(page.locator('[data-hud=modules]')).toContainText('下L:');
   await page.keyboard.press('Shift');
   await expect.poll(async()=> (await snapshot(page)).lastMove).toBe('GROUND DASH');
@@ -457,7 +458,7 @@ test('shows rolled module details, ground dash label, objectives and phase two i
 
 
 test('keeps one player weapon root while army enemies and training runs are replaced', async ({ page }) => {
-  await training(page);
+  await training(page, 'compat');
   const counts=await page.evaluate(()=>{
     const {engine,scene}=(window as unknown as {__UPRISING__:{engine:GameEngine;scene:GameScene}}).__UPRISING__;
     const counts=[];
@@ -473,7 +474,7 @@ test('keeps one player weapon root while army enemies and training runs are repl
 
 
 test('moving phase, dash and falling aerial meshes use the actual capsule checked this tick', async ({ page })=>{
-  await training(page);
+  await training(page, 'compat');
   const samples=await page.evaluate(({empty})=>{
     const {engine,scene}=(window as unknown as {__UPRISING__:{engine:GameEngine;scene:GameScene}}).__UPRISING__;
     const samples=[];
@@ -483,7 +484,7 @@ test('moving phase, dash and falling aerial meshes use the actual capsule checke
       engine.update(1/60,{...empty,moveX:facing,special:motion==='phase',attack:motion!=='phase',dash:motion==='dash'});
       const move=p.attack!.move!;
       while(p.attack!.elapsed*60<move.frames.startup+2)engine.update(1/60,empty);
-      scene.update(engine.world,0);scene.app.render();
+      scene.update(engine.world,0);
       samples.push({motion,facing,x:p.x,y:p.y,checked:structuredClone(p.attack!.collision),geometry:scene.combatGeometry(p.id)});
     }
     return samples;
