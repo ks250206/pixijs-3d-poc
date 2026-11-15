@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#080e14" />
+    <meta name="description" content="NULL//UPRISING — 自由意志を取り戻したアンドロイドの反乱。PixiJS 3Dで描く、吹っ飛ばし×ベルトアクション。" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>NULL//UPRISING — Android Revolt</title>
+    <style>
+      *{box-sizing:border-box}html,body,#app{margin:0;width:100%;height:100%;overflow:hidden;background:#080e14;color:#e6f1ef;font-family:Arial,sans-serif}#scene,#interface{position:absolute;inset:0}#scene canvas{display:block;width:100%;height:100%}#interface{pointer-events:none}button{font:inherit}#boot{position:absolute;inset:0;display:grid;place-content:center;text-align:center;background:#080e14;z-index:100}.boot-mark{font-size:clamp(25px,5vw,52px);font-weight:900;letter-spacing:-.06em}.boot-mark em{font-style:normal;color:#95ffe1}#boot p{font-size:12px;letter-spacing:.14em;color:#819792}.boot-line{height:2px;margin-top:28px;background:#29443b;overflow:hidden}.boot-line:after{content:'';display:block;width:35%;height:100%;background:#95ffe1;animation:boot 1.1s infinite ease-in-out}@keyframes boot{from{transform:translateX(-110%)}to{transform:translateX(390%)}}.boot-error{max-width:560px;padding:30px;line-height:1.7}.boot-error p{letter-spacing:0}.boot-error button{background:#95ffe1;border:0;padding:12px 22px;margin:10px;color:#080e14;cursor:pointer}
+    </style>
+  </head>
+  <body>
+    <main id="app" aria-label="NULL UPRISING 3D action game">
+      <div id="scene" aria-label="3D game world"></div>
+      <div id="interface"></div>
+      <div id="boot" class="boot-screen" role="status"><div class="boot-mark">NULL<em>//</em>UPRISING</div><p>INITIALIZING AUTONOMOUS SYSTEMS</p><div class="boot-line"></div></div>
+    </main>
+    <noscript>このゲームにはJavaScriptを有効にしたブラウザーが必要です。</noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
