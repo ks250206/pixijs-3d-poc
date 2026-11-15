@@ -56,6 +56,15 @@ describe('playable fighting styles', () => {
     tick(game, 40);
     expect(game.world.enemies[0]!.damage).toBe(0);
   });
+  it('retains smash guard-breaking power when a cannon round reaches the target', () => {
+    const game = arena('cannon', 6);
+    const enemy = game.world.enemies[0]!;
+    enemy.kind = 'sentinel'; enemy.guard = 40; enemy.facing = -1;
+    game.update(1 / 60, { ...EMPTY_INPUT, smash: true, smashHeld: true });
+    tick(game, 85);
+    expect(enemy.guard).toBe(0);
+    expect(enemy.damage).toBeGreaterThan(10);
+  });
   it('uses a different thrust, recoil, and spinning motion for the new weapons', () => {
     const game = arena('arc'); jab(game);
     const attack = { ...game.world.player.attack!, elapsed: 0.12 };
