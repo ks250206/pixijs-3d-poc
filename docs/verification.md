@@ -4,7 +4,7 @@ Baseline: fresh `origin/main` `2108f94608e2054f8d68c5b879d4a32af4728412` (7 stag
 
 - Typecheck: passed.
 - Logic: **134 tests / 9 files**, including ordinary-input completion of all seven stages and objective sectors 0/2/5. The finite bot budget is 15 simulated minutes to include the longer coordinated danger/recovery windows; the complete logic suite takes approximately one second locally.
-- Lint: passed with no warnings.
+- Existing Pages workflow unchanged; lint passed locally with no warnings. CI retains its existing typecheck / logic / build / browser sequence.
 - Production build: passed.
 - Playwright: **16 tests**, including actual WebGL2 canvas pixel checks, graphics presets, desktop and mobile touch/menu layouts, all six weapon selections, keyboard actions, objectives/phase indicators, and scene resource replacement.
 - Lance numerical evidence: both facings × forward/back/up/down aerial × three active samples. The actual visible tip primitive, trail endpoints and debug endpoints are transformed with Pixi matrices and compared against the **capsule used by collision**, not a second render-only calculation. Further phase cross/dash/falling-aerial comparisons cover both facings under translation.
