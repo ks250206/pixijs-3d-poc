@@ -13,3 +13,11 @@ No changes to render/motion.ts, render/robot.ts, render/weapon.ts or combat/geom
 ### Verification
 
 `tests/roguelite-map.test.ts` checks 1000 deterministic seeds, incoming edges, forward choices and boss reachability, full three-Act completion, forged travel, once-only completion, consecutive core-theme ordinary battles and original-loadout restart. Ring-out fixtures intentionally accelerate encounter completion; they are progression tests, not long-session balance evidence. Browser rendering uses the existing software WebGL test configuration; GPU and physical gamepad validation are separate and unclaimed.
+
+## Plan 12 — elite modifiers and SCRAP (#10)
+
+SCRAP is independent of score: battle 30, elite 60, boss 90, once per node. Rewards offer the existing weapon mechanics/module exchanges and an explicit skip; a fully capped pool continues safely. Seeded shops sell upgrades/modules (40–55), repair (25, −40% damage), stock (75, cap4), and relics (60–80). Items are sold once; engine rejects invalid IDs, insufficient balance and ineffective capped purchases without charging. Treasure grants a distinct relic and20 SCRAP (all-owned fallback30 more). Rest offers −50% repair or a usable upgrade (fully capped fallback20 SCRAP).
+
+Ten data-defined relics affect outgoing/incoming damage, ordinary movement, special recovery, salvage rewards, future shop prices, postcombat repair, stock, launch force and treasure yield. They reset on a new run. Elite selection is keyed per node and previewed: +25% damage, +25% ordinary movement, +50% roster reinforcements, +40% shield/armor/mount, threshold60 berserk, or commander cohort. The single `hit` boundary scales applicable melee/projectile/hazard damage once; emitters retain unscaled data. No attack/telegraph/cooldown timings or director reservations are accelerated. Staged arrivals retain the14 active enemy cap.
+
+Parent review follow-ups for final UX layer: vary map topology by seed; use Act-specific biome pools with an easy opener; unify keyboard/toolbar route entry and clear inspection state on reset. These are recorded rather than claimed as already verified in this layer.

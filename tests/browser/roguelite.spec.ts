@@ -17,13 +17,13 @@ test('route selection is confirmed separately and core theme resets across encou
     const {engine:g, scene}=window.__UPRISING__;
     const counts=[];
     for (let step=0;step<2;step++) {
-      if (step===0) { for (const e of g.world.enemies) e.alive=false; g.world.pendingSpawns=[]; for(let i=0;i<100;i++)g.update(1/60); g.completeNode(); }
+      if (step===0) { for (const e of g.world.enemies) e.alive=false; g.world.pendingSpawns=[]; for(let i=0;i<100;i++)g.update(1/60); g.skipUpgrade(); g.completeNode(); }
       const r=g.run!, id=r.map.find(n=>n.id===r.current)!.next[0]!;
       const n=r.map.find(n=>n.id===id)!; n.theme=6; n.kind='battle';
       g.selectNode(id); g.travelNode(); scene.update(g.world,0);
       const props=g.world.props.map(p=>p.id);
       counts.push({props,count:(scene.getDiagnostics() as {actorViewCount:number}).actorViewCount});
-      for (const e of g.world.enemies) e.alive=false; g.world.pendingSpawns=[]; for(let i=0;i<100;i++)g.update(1/60); g.completeNode();
+      for (const e of g.world.enemies) e.alive=false; g.world.pendingSpawns=[]; for(let i=0;i<100;i++)g.update(1/60); g.skipUpgrade(); g.completeNode();
     }
     return counts;
   });
@@ -37,4 +37,17 @@ test('390px map stays within viewport and supports keyboard selection and confir
   expect(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.keyboard.press('Enter'); await expect(page.locator('.rogue-panel')).toBeHidden();
   expect(await page.evaluate(()=>window.__UPRISING__.engine.world.player.attack)).toBeNull();
+});
+test('shop purchase and treasure are once-only through the run UI', async ({page})=>{
+  await boot(page);
+  await page.evaluate(()=>{
+    const g=window.__UPRISING__.engine,r=g.run!;r.map[0]!.kind='shop';r.economy.scrap=200;
+    g.selectNode('1-0-0');g.travelNode();
+  });
+  const buy=page.locator('[data-buy]').first();await expect(buy).toBeEnabled();await buy.click();await expect(buy).toBeDisabled();
+  expect(await page.evaluate(()=>window.__UPRISING__.engine.world.upgrades.length)).toBe(1);
+  await page.locator('[data-rogue=complete]').click();
+  await page.evaluate(()=>{const g=window.__UPRISING__.engine,r=g.run!,id=r.map[0]!.next[0]!;r.map.find(n=>n.id===id)!.kind='treasure';g.selectNode(id);g.travelNode();});
+  await page.locator('[data-benefit=treasure]').click();await expect(page.locator('[data-benefit=treasure]')).toBeDisabled();
+  expect(await page.evaluate(()=>window.__UPRISING__.engine.run!.economy.relics.length)).toBe(1);
 });
