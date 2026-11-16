@@ -785,11 +785,214 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
   .upgrade-card { min-height: 185px; }
 }
 
-/* CPU-generated run routes; independent of the combat renderer. */
-.rogue-panel{position:fixed;z-index:1500;inset:76px max(12px,calc((100vw - 960px)/2)) 16px;background:#0a1724f7;color:#e3f9f7;border:1px solid #4adbc5;border-radius:12px;padding:20px;overflow:auto;pointer-events:auto;font:14px/1.6 sans-serif;box-shadow:0 20px 80px #000a}
-.rogue-panel[hidden]{display:none}.rogue-heading{display:flex;justify-content:space-between;align-items:center;gap:10px}.rogue-heading h2{font-size:20px;margin:0}.rogue-panel p{color:#b3cbd1}.rogue-layout{display:grid;grid-template-columns:minmax(0,380px) minmax(0,1fr);gap:24px}.route-map{position:relative;aspect-ratio:380/580;width:100%}.route-map svg{position:absolute;inset:0;width:100%;height:100%;stroke:#4a6778;stroke-width:2}.rogue-panel button{background:#142d3d;color:#e3f9f7;border:1px solid #6f8e99;border-radius:6px;padding:10px;cursor:pointer;white-space:normal}.rogue-panel button:disabled{cursor:default;opacity:.4}.rogue-panel button:focus-visible{outline:3px solid #ffd079;outline-offset:3px}.route-map .route-node{position:absolute;transform:translate(-50%,-50%);font-size:9px;padding:7px 3px;max-width:23%;min-width:48px}.route-node.available{border-color:#59ffe1}.route-node.current{background:#166f65;opacity:1!important}.route-node.visited{border-color:#ffd079}.route-node[aria-pressed=true]{outline:3px solid #ffd079}.rogue-detail{min-width:0}.rogue-detail>button{display:block;width:100%;margin:10px 0}.mode-switch{flex-wrap:wrap}
-@media(max-width:600px){.rogue-panel{inset:64px 8px 8px;padding:14px}.rogue-layout{grid-template-columns:1fr;gap:6px}.route-map{max-width:380px;margin:auto}.rogue-heading{align-items:flex-start}.rogue-heading h2{font-size:16px}.rogue-heading span{font-size:10px}.rogue-panel p{font-size:12px}.rogue-detail{border-top:1px solid #4a6778}.launch-row{flex-wrap:wrap}}
-.rogue-detail button{display:block;width:100%;margin:8px 0;text-align:left}.rogue-detail p{overflow-wrap:anywhere}
-[data-run-save]{margin-top:12px;max-width:100%;font-size:12px;color:#c2ddd9}[data-run-save] button{border:1px solid #58d8c5;color:#e4fff9;background:#153731;padding:8px;margin:4px;cursor:pointer}[data-run-save] button:disabled{opacity:.4}
-.rogue-warning{position:fixed;z-index:2001;top:56px;left:12px;right:12px;padding:12px;color:#fff;background:#803022;border:2px solid #ffc588;font:14px/1.5 sans-serif;pointer-events:none}.rogue-warning[hidden]{display:none}
-.rogue-panel{background:#0a1724}.rogue-panel button:disabled{opacity:.65}.route-map .route-node{font-size:10px;font-weight:600}.rogue-open .play-hud,.rogue-open .controls-footer,.rogue-open .touch-controls{visibility:hidden}
+/* Roguelite operation map. Namespaced to keep the campaign map independent. */
+.rogue-panel {
+  --route-mint: #b5f4cf;
+  --route-muted: #99aba8;
+  --route-line: #ffffff14;
+  position: fixed; z-index: 1500; inset: 82px max(24px, calc((100vw - 1200px) / 2)) 24px;
+  display: flex; flex-direction: column; color: #ebf2eb; background: #101917;
+  border: 1px solid #5a756754; border-radius: 12px; box-shadow: 0 30px 100px #0009;
+  overflow: hidden; pointer-events: auto; font: 13px/1.65 Arial, 'Hiragino Kaku Gothic ProN', sans-serif;
+}
+.rogue-panel h2, .rogue-panel h3, .rogue-panel h4, .rogue-panel p { margin: 0; }
+.rogue-panel button { border: 1px solid #5b746b; border-radius: 6px; background: #182722; color: #e8f2eb; }
+.rogue-panel button:disabled { opacity: 1; cursor: default; }
+.rogue-panel button:focus-visible, .rogue-panel summary:focus-visible, .rogue-map-scroll:focus-visible { outline: 2px solid #f4dc9e; outline-offset: 4px; }
+.rogue-panel .rogue-kicker { display: block; color: var(--route-muted); font: 10px/1.6 var(--mono); letter-spacing: 1.2px; }
+.rogue-heading { display: flex; justify-content: space-between; align-items: center; gap: 32px; padding: 24px 30px 22px; flex-shrink: 0; }
+.rogue-heading h2 { display: flex; align-items: center; gap: 16px; margin-top: 6px; font-size: 27px; line-height: 1.2; font-weight: 700; letter-spacing: 1px; }
+.rogue-heading h2 > span { color: var(--route-mint); font: 11px var(--mono); padding: 5px 8px; border: 1px solid #b5f4cf40; border-radius: 3px; letter-spacing: 1px; }
+.rogue-acts { display: flex; list-style: none; padding: 0; margin: 0; gap: 24px; }
+.rogue-acts li { display: flex; align-items: center; gap: 10px; color: #81938c; }
+.rogue-acts li > span { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid #42524b; border-radius: 50%; font: 12px var(--mono); }
+.rogue-acts li small { display: block; font: 9px var(--mono); margin-bottom: 3px; letter-spacing: 1px; }
+.rogue-acts li b { font-size: 11px; font-weight: 400; }
+.rogue-acts li.active { color: var(--route-mint); }
+.rogue-acts li.active > span { color: #12291d; background: var(--route-mint); border-color: var(--route-mint); }
+.rogue-acts li.done > span { border-color: var(--route-mint); color: var(--route-mint); }
+.rogue-resources { display: flex; gap: 36px; padding: 12px 30px; border-block: 1px solid var(--route-line); background: #c1e4cb04; flex-shrink: 0; }
+.rogue-resources > div { display: flex; align-items: baseline; gap: 13px; }
+.rogue-resources > div > span { color: #a2b5aa; font-size: 11px; }
+.rogue-resources b { font: 20px var(--mono); }
+.rogue-resources b small { color: var(--route-muted); font: 10px Arial, sans-serif; margin-left: 7px; }
+.rogue-resources .rogue-scrap { color: #ebd89e; border-right: 1px solid #ffffff24; padding-right: 36px; }
+.rogue-resources .rogue-scrap > span { color: #ebd89e; font: 10px var(--mono); letter-spacing: 1px; }
+.rogue-resources .rogue-weapon { margin-left: auto; }
+.rogue-weapon b { font-size: 13px; }
+.rogue-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: minmax(0, 1fr) auto; }
+.rogue-map-section { grid-row: 1 / 3; min-height: 0; display: flex; flex-direction: column; position: relative; border-right: 1px solid var(--route-line); background: radial-gradient(ellipse at 50% 75%, #28453745, transparent 70%), #0d1512; }
+.rogue-map-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 22px 26px 10px; }
+.rogue-map-heading h3 { margin-top: 4px; font-size: 21px; line-height: 1.3; letter-spacing: 1px; }
+.rogue-map-heading .rogue-kicker { font-size: 9px; letter-spacing: .7px; }
+.rogue-progress { font: 22px var(--mono); color: var(--route-mint); white-space: nowrap; }
+.rogue-progress > span { font: 10px Arial, sans-serif; color: #91a299; }
+.rogue-map-guide { display: flex; justify-content: space-between; padding: 0 26px 10px; font-size: 10px; color: #99ada2; }
+.rogue-map-guide > span:last-child { color: var(--route-mint); }
+.rogue-map-guide i { display: inline-block; width: 5px; height: 5px; background: var(--route-mint); border-radius: 50%; vertical-align: 2px; margin-right: 5px; }
+.rogue-map-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #536b59 transparent; background-image: radial-gradient(#b5f4cf14 .6px, transparent .6px); background-size: 20px 20px; }
+.route-map { position: relative; width: min(100%, 580px); height: max(440px, 100%); margin: 0 auto; }
+.rogue-connections { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; }
+.rogue-edge { stroke: #4f6557; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.rogue-edge.locked { stroke: #293b31; stroke-dasharray: 3 5; }
+.rogue-edge.available { stroke: #b5f4cf; stroke-width: 2; stroke-dasharray: 5 5; }
+.rogue-edge.selected, .rogue-edge.traveled { stroke: #b5f4cf; stroke-width: 2.5; }
+.rogue-floor { position: absolute; left: 13px; transform: translateY(-50%); font: 10px var(--mono); color: #6c8475; }
+.rogue-panel .rogue-map-node { position: absolute; width: 56px; height: 56px; padding: 0; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 3px; background: none; border: 0; border-radius: 4px; color: #a8b9ae; }
+.rogue-node-symbol { position: relative; display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid #586e5d; border-radius: 50%; background: #17231c; }
+.rogue-node-symbol svg { width: 21px; height: 21px; }
+.rogue-node-label { font-size: 10px; line-height: 1.4; white-space: nowrap; background: #0f1914; padding: 0 4px; border-radius: 3px; }
+.kind-elite, .kind-boss { --kind-color: #e8ad91; }
+.kind-shop, .kind-treasure { --kind-color: #e5cc8e; }
+.kind-rest { --kind-color: #a6d5b6; }
+.kind-unknown, .kind-event { --kind-color: #b8b2df; }
+.kind-battle { --kind-color: #c2d2c6; }
+.rogue-map-node .rogue-node-symbol { color: var(--kind-color); }
+.rogue-map-node.kind-elite .rogue-node-symbol { border-radius: 9px; }
+.rogue-map-node.kind-boss .rogue-node-symbol { border-radius: 8px; border-color: #ad7960; width: 48px; height: 44px; background: #2c241e; }
+.rogue-panel .rogue-map-node.unreachable { opacity: .45; }
+.rogue-map-node.available .rogue-node-symbol { color: #12261b; background: var(--route-mint); border-color: var(--route-mint); box-shadow: 0 0 0 5px #b5f4cf0d, 0 0 24px #b5f4cf20; }
+.rogue-map-node.available .rogue-node-label { color: var(--route-mint); }
+.rogue-map-node.available:hover .rogue-node-symbol { box-shadow: 0 0 0 5px #b5f4cf22, 0 0 24px #b5f4cf30; }
+.rogue-map-node[aria-pressed="true"] .rogue-node-symbol { outline: 2px solid var(--route-mint); outline-offset: 5px; }
+.rogue-map-node.current .rogue-node-symbol { border: 2px solid var(--route-mint); color: var(--route-mint); }
+.rogue-map-node.visited .rogue-node-symbol { background: #244332; border-color: #76ae88; }
+.rogue-node-check { position: absolute; top: -5px; right: -5px; width: 16px; height: 16px; font: bold 11px/16px Arial, sans-serif; border-radius: 50%; background: var(--route-mint); color: #14281b; }
+.rogue-node-current { position: absolute; top: 56px; color: var(--route-mint); font-size: 9px; white-space: nowrap; line-height: 1; }
+.rogue-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px 15px; border-top: 1px solid var(--route-line); padding: 13px 16px; background: #101b15; flex-shrink: 0; }
+.rogue-legend > span { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: #acbdb1; }
+.rogue-legend svg { width: 15px; height: 15px; color: var(--kind-color); }
+.rogue-detail { min-width: 0; overflow: auto; overscroll-behavior: contain; padding: 24px; scrollbar-width: thin; scrollbar-color: #536b59 transparent; }
+.rogue-destination > .rogue-kicker { padding-bottom: 20px; border-bottom: 1px solid var(--route-line); }
+.rogue-destination-heading { display: flex; align-items: center; gap: 14px; margin: 24px 0 18px; }
+.rogue-destination-heading .rogue-kicker { font-size: 9px; color: var(--kind-color); letter-spacing: 1px; }
+.rogue-destination h3 { font-size: 25px; line-height: 1.5; }
+.rogue-destination h3 small { display: block; font: 11px var(--mono); margin-top: 6px; }
+.rogue-destination-icon, .rogue-empty-icon { display: grid; place-items: center; flex-shrink: 0; width: 54px; height: 58px; border: 1px solid #617464; border-radius: 8px; color: var(--kind-color); background: #1c2921; }
+.rogue-destination-icon svg, .rogue-empty-icon svg { width: 30px; height: 30px; }
+.rogue-detail p { font-size: 12px; line-height: 1.9; color: #adbdb1; overflow-wrap: anywhere; }
+.rogue-detail .rogue-location { color: #e4e9df; font: 11px/1.8 var(--mono); margin-bottom: 12px; letter-spacing: 1px; }
+.rogue-reward-preview { border-left: 2px solid #8dae91; padding: 2px 0 2px 12px; margin-top: 24px; }
+.rogue-reward-preview span { display: block; color: #9aafa0; font-size: 10px; margin-bottom: 6px; }
+.rogue-reward-preview b { display: block; font-size: 12px; font-weight: 400; }
+.rogue-destination.empty { padding-bottom: 12px; }
+.rogue-empty-icon { color: #b4ccb9; margin: 28px 0 22px; border-style: dashed; }
+.rogue-destination.empty h3 { font-size: 20px; margin-bottom: 12px; }
+.rogue-detail .rogue-threat { padding: 9px 12px; margin-top: 12px; background: #e8ad910b; border-left: 2px solid #c29579; color: #e8c6ac; }
+.rogue-build { border-block: 1px solid var(--route-line); margin-top: 28px; font-size: 12px; }
+.rogue-build summary { display: flex; justify-content: space-between; align-items: center; cursor: pointer; list-style: none; padding: 14px 0; color: #bccbbe; }
+.rogue-build summary::-webkit-details-marker { display: none; }
+.rogue-build summary b { font: 12px var(--mono); color: var(--route-mint); }
+.rogue-build summary b span { margin-left: 14px; }
+.rogue-build[open] summary b span { display: inline-block; transform: rotate(180deg); }
+.rogue-build > div { padding-bottom: 14px; }
+.rogue-build p + p { margin-top: 12px; }
+.rogue-build p b, .rogue-build p span { display: block; }
+.rogue-build p b { color: #dfebdf; }
+.rogue-actions { margin-top: 24px; border-top: 1px solid var(--route-line); padding-top: 20px; }
+.rogue-actions h4 { font-size: 15px; margin-bottom: 10px; }
+.rogue-actions button { display: block; width: 100%; padding: 13px 14px; margin-top: 10px; text-align: left; font-size: 12px; line-height: 1.7; }
+.rogue-actions button b { display: block; font-size: 13px; font-weight: 500; }
+.rogue-actions button span { display: block; color: #b8c7ba; margin-top: 4px; font-size: 11px; }
+.rogue-actions button:not(:disabled):hover { background: #2a4231; border-color: var(--route-mint); }
+.rogue-actions button:disabled { color: #84958a; border-color: #344339; background: #142019; }
+.rogue-actions button:disabled span { color: #84958a; }
+.rogue-actions .rogue-price { color: #ebd89e; font-family: var(--mono); }
+.rogue-detail .rogue-confirmed { padding: 12px; background: #b5f4cf09; border-left: 2px solid var(--route-mint); color: #c5e6ca; }
+.rogue-combat-note { margin-top: 20px !important; }
+.rogue-departure { padding: 20px 24px; border-top: 1px solid var(--route-line); background: #15231b; }
+.rogue-departure p { margin: 4px 0 14px; font-size: 12px; }
+.rogue-panel .rogue-primary { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 48px; padding: 12px 16px; color: #15291c; background: var(--route-mint); border-color: var(--route-mint); font-size: 13px; font-weight: 700; }
+.rogue-panel .rogue-primary > span { font: 22px/1 var(--mono); }
+.rogue-panel .rogue-primary:not(:disabled):hover { background: #d2ffdf; }
+.rogue-panel .rogue-primary:disabled { color: #91a898; background: #273a2d; border-color: #45604b; }
+.rogue-footer { display: flex; align-items: center; gap: 20px; padding: 10px 24px; border-top: 1px solid var(--route-line); flex-shrink: 0; font-size: 10px; }
+.rogue-save { color: #bbd7be; }
+.rogue-save > span { color: #8d9e91; margin-left: 14px; }
+.rogue-save.failed { color: #ffba95; }
+.rogue-seed { margin-left: auto; color: #84988b; font: 9px var(--mono); }
+.rogue-panel .rogue-text-button { color: #9eafa2; background: transparent; border-color: transparent; padding: 8px 0; font-size: 11px; }
+.rogue-panel .rogue-text-button:hover { color: #ebd1b1; }
+.mode-switch { flex-wrap: wrap; }
+[data-run-save] { margin-top: 12px; max-width: 100%; font-size: 12px; color: #c2ddd9; }
+[data-run-save] button { border: 1px solid #58d8c5; color: #e4fff9; background: #153731; padding: 8px; margin: 4px; cursor: pointer; }
+[data-run-save] button:disabled { opacity: .4; }
+.rogue-warning { position: fixed; z-index: 2001; top: 56px; left: 12px; right: 12px; padding: 12px; color: #fff; background: #803022; border: 2px solid #ffc588; font: 14px/1.5 sans-serif; pointer-events: none; }
+.rogue-open .play-hud, .rogue-open .controls-footer, .rogue-open .touch-controls { visibility: hidden; }
+@media (min-width: 761px) and (max-height: 780px) {
+  .rogue-panel { inset-block: 64px 12px; }
+  .rogue-heading { padding-block: 14px; }
+  .rogue-map-heading { padding-top: 14px; }
+  .rogue-resources { padding-block: 9px; }
+}
+@media (max-width: 1000px) {
+  .rogue-acts { gap: 14px; }
+  .rogue-acts li div { display: none; }
+  .rogue-layout { grid-template-columns: minmax(0, 1fr) 300px; }
+  .rogue-resources { gap: 20px; }
+  .rogue-resources .rogue-scrap { padding-right: 20px; }
+  .rogue-save > span { display: none; }
+}
+@media (max-width: 760px) {
+  .rogue-panel { inset: 0; border: 0; border-radius: 0; padding-top: env(safe-area-inset-top); }
+  .rogue-heading { padding: 16px 18px 14px; gap: 12px; }
+  .rogue-heading h2 { font-size: 20px; gap: 10px; }
+  .rogue-heading h2 > span { display: none; }
+  .rogue-heading .rogue-kicker { font-size: 8px; }
+  .rogue-acts { gap: 9px; }
+  .rogue-acts li > span { width: 27px; height: 27px; font-size: 10px; }
+  .rogue-resources { padding: 11px 18px; justify-content: space-between; gap: 12px; }
+  .rogue-resources > div { gap: 8px; }
+  .rogue-resources > div > span { font-size: 10px; }
+  .rogue-resources b { font-size: 17px; }
+  .rogue-resources .rogue-scrap { padding-right: 12px; }
+  .rogue-resources .rogue-weapon { display: none; }
+  .rogue-layout { display: flex; flex-direction: column; overflow: auto; overscroll-behavior: contain; }
+  .rogue-map-section { flex: 0 0 auto; border-right: 0; border-bottom: 1px solid var(--route-line); }
+  .rogue-map-heading { padding: 16px 18px 8px; }
+  .rogue-map-heading h3 { font-size: 18px; }
+  .rogue-map-heading .rogue-kicker { font-size: 8px; }
+  .rogue-progress { font-size: 18px; }
+  .rogue-map-guide { padding: 0 18px 10px; }
+  .rogue-map-scroll { flex: none; height: clamp(190px, 30dvh, 320px); }
+  .route-map { width: calc(100% - 12px); height: 644px; }
+  .rogue-floor { left: 6px; }
+  .rogue-legend { padding: 10px 12px; gap: 10px; }
+  .rogue-legend > span { gap: 3px; font-size: 9px; }
+  .rogue-legend svg { width: 13px; height: 13px; }
+  .rogue-detail { overflow: visible; flex: 1 0 auto; padding: 20px 18px; }
+  .rogue-destination > .rogue-kicker { display: none; }
+  .rogue-destination-heading { margin: 0 0 12px; }
+  .rogue-destination-icon { width: 44px; height: 46px; }
+  .rogue-destination h3 { font-size: 22px; }
+  .rogue-destination.empty { padding-bottom: 0; }
+  .rogue-destination.empty > .rogue-kicker, .rogue-empty-icon { display: none; }
+  .rogue-destination.empty h3 { font-size: 17px; margin-bottom: 8px; }
+  .rogue-destination.empty p br { display: none; }
+  .rogue-reward-preview { margin-top: 16px; }
+  .rogue-build { margin-top: 20px; }
+  .rogue-departure { position: sticky; bottom: 0; flex-shrink: 0; z-index: 2; display: flex; align-items: center; gap: 12px; padding: 12px 18px; margin-top: auto; box-shadow: 0 -12px 24px #0c181750; }
+  .rogue-departure > div { flex: 1; min-width: 0; }
+  .rogue-departure .rogue-kicker { font-size: 8px; letter-spacing: .6px; }
+  .rogue-departure p { font-size: 11px; margin: 4px 0 0; }
+  .rogue-panel .rogue-primary { width: 166px; flex-shrink: 0; padding: 12px; font-size: 12px; }
+  .rogue-footer { padding: 5px 18px calc(5px + env(safe-area-inset-bottom)); gap: 12px; font-size: 9px; }
+  .rogue-footer .rogue-text-button { font-size: 10px; }
+  .rogue-warning { top: 0; font-size: 12px; }
+  .launch-row { flex-wrap: wrap; }
+  .rogue-panel[data-phase="node"] .rogue-map-scroll, .rogue-panel[data-phase="reward"] .rogue-map-scroll { height: 150px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rogue-panel button { transition: none; }
+}
+
+@media (min-width: 761px) and (max-height: 600px) {
+  .rogue-panel { inset: 8px; }
+  .rogue-heading { padding: 12px 20px; }
+  .rogue-heading h2 { font-size: 21px; }
+  .rogue-map-heading { padding: 12px 20px 8px; }
+  .rogue-legend { padding-block: 8px; }
+  .rogue-departure { padding: 12px 20px; }
+  .rogue-departure p { margin-bottom: 8px; }
+  .rogue-footer { padding-block: 4px; }
+}

@@ -123,8 +123,15 @@ async function continueRun(page: import("@playwright/test").Page) {
 }
 for (const width of [1200, 390])
   test(`route/shop/event screenshots and transactional refresh at ${width}px`, async ({ page }) => {
+    // Three reloads and three full-page captures at desktop size: under CI's software WebGL this
+    // sits right at the default per-test limit (2.0–2.1 min), so it gets the slow-test allowance.
+    test.slow(width === 1200);
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await boot(page);
+    if (width === 1200) {
+      await expect(page.locator('[data-node="1-7-0"]')).toBeInViewport({ ratio: 1 });
+      await expect(page.locator('[data-node="1-0-0"]')).toBeInViewport({ ratio: 1 });
+    }
     await page.screenshot({ path: `test-results/screenshots/rogue-route-${width}.png` });
     await page.locator('[data-node="1-0-0"]').click();
     await continueRun(page);
@@ -302,5 +309,98 @@ test("route blocks simulated gamepad START and attack input across render ticks"
     Object.defineProperty(navigator, "getGamepads", { value: () => [] });
   });
   await page.keyboard.press("Escape");
+  await expect(page.locator(".rogue-panel")).toBeHidden();
+});
+
+test("map selection keeps keyboard focus and exposes the selected destination", async ({
+  page,
+}) => {
+  await boot(page);
+  const first = page.locator('[data-node="1-0-0"]');
+  await first.focus();
+  await page.keyboard.press("Enter");
+  await expect(first).toBeFocused();
+  await expect(first).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".rogue-destination")).toContainText("THE FOUNDRY");
+  await expect(page.locator(".rogue-destination")).toContainText("SCRAP・武器強化");
+  await expect(page.locator(".game-ui")).toHaveAttribute("inert", "");
+  // Future nodes carry readable labels, but cannot be activated.
+  await expect(page.locator('[data-node="1-1-0"]')).toBeDisabled();
+  await expect(page.locator('[data-node="1-1-0"]')).toHaveAccessibleName(/2階.*未到達/);
+  await page.locator("[data-rogue=travel]").click();
+  await expect(page.locator(".game-ui")).not.toHaveAttribute("inert", "");
+  await page.keyboard.press("m");
+  await expect(first).toHaveAttribute("aria-current", "step");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".rogue-panel")).toBeHidden();
+});
+
+for (const width of [390, 320])
+  test(`mobile destination and departure stay usable at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await boot(page);
+    const first = page.locator('[data-node="1-0-0"]');
+    await expect(first).toBeInViewport();
+    const box = await first.boundingBox();
+    expect(box!.width).toBeGreaterThanOrEqual(44);
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    await first.click();
+    await expect(first).toBeFocused();
+    await expect(page.locator(".rogue-destination h3")).toBeInViewport();
+    await expect(page.locator("[data-rogue=travel]")).toBeInViewport({ ratio: 1 });
+    expect(
+      await page.locator(".rogue-panel").evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBe(true);
+    await page.locator(".rogue-layout").evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(page.locator("[data-rogue=travel]")).toBeInViewport({ ratio: 1 });
+    await page.locator("[data-rogue=travel]").click();
+    await expect(page.locator(".rogue-panel")).toBeHidden();
+  });
+
+test("completed route and available branches are distinct and choosing a branch retains scroll", async ({
+  page,
+}) => {
+  await boot(page);
+  // Use the existing deterministic completion fixture, without waiting for real combat.
+  await page.evaluate(() => {
+    const g = window.__UPRISING__.engine;
+    g.selectNode("1-0-0");
+    g.travelNode();
+    g.world.enemies.forEach((e) => {
+      e.alive = false;
+    });
+    g.world.pendingSpawns = [];
+    for (let i = 0; i < 100; i++) g.update(1 / 60);
+    g.skipUpgrade();
+    g.completeNode();
+  });
+  const choices = page.locator(".rogue-map-node.available");
+  await expect(choices).toHaveCount(3);
+  await expect(page.locator('[data-node="1-0-0"]')).toHaveClass(/visited/);
+  await expect(page.locator(".rogue-edge.available")).toHaveCount(3);
+  await choices.nth(1).focus();
+  await page.keyboard.press("Enter");
+  await expect(choices.nth(1)).toBeFocused();
+  await expect(page.locator(".rogue-edge.selected")).toHaveCount(1);
+  const before = await page.locator(".rogue-map-scroll").evaluate((el) => el.scrollTop);
+  await page.keyboard.press("ArrowRight");
+  await expect(choices.nth(2)).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(choices.nth(2)).toHaveAttribute("aria-pressed", "true");
+  expect(await page.locator(".rogue-map-scroll").evaluate((el) => el.scrollTop)).toBe(before);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('[data-node="1-0-0"]')).toBeInViewport({ ratio: 1 });
+  await expect(choices.nth(2)).toBeInViewport({ ratio: 1 });
+});
+
+test("landscape route keeps its departure action visible", async ({ page }) => {
+  await page.setViewportSize({ width: 844, height: 390 });
+  await boot(page);
+  await expect(page.locator('[data-node="1-0-0"]')).toBeInViewport({ ratio: 1 });
+  await page.locator('[data-node="1-0-0"]').click();
+  await expect(page.locator('[data-rogue="travel"]')).toBeInViewport({ ratio: 1 });
+  await page.locator('[data-rogue="travel"]').click();
   await expect(page.locator(".rogue-panel")).toBeHidden();
 });
