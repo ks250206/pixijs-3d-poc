@@ -22,7 +22,7 @@ test('route selection is confirmed separately and core theme resets across encou
       const n=r.map.find(n=>n.id===id)!; n.theme=6; n.kind='battle';
       g.selectNode(id); g.travelNode(); scene.update(g.world,0);
       const props=g.world.props.map(p=>p.id);
-      counts.push({props,count:scene.getDiagnostics().actorViewCount});
+      counts.push({props,count:(scene.getDiagnostics() as {actorViewCount:number}).actorViewCount});
       for (const e of g.world.enemies) e.alive=false; g.world.pendingSpawns=[]; for(let i=0;i<100;i++)g.update(1/60); g.completeNode();
     }
     return counts;
