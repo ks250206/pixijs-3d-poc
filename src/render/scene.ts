@@ -1,4 +1,5 @@
 import { sampleWeapon, bodyHurtbox } from '../game/combat/geometry';
+import { laneAssist } from '../game/combat/assist';
 import { placeSegment, worldMatrix } from './weapon';
 import { Application, Container, Graphics, RendererType, Text, Texture } from 'pixi.js';
 import type { WebGLRenderer } from 'pixi.js';
@@ -752,7 +753,9 @@ export class GameScene {
     };
     if (this.debugHitboxes && world.mode === 'training') for (const actor of [world.player, ...world.enemies]) {
       if (!actor.alive) continue;
-      const box = bodyHurtbox(actor), b = mesh();
+      // Enemies are drawn at the depth the player's weapon is tested against (lane assist);
+      // the player's own box is the exact one enemy attacks test.
+      const box = actor.kind === 'player' ? bodyHurtbox(actor) : laneAssist(bodyHurtbox(actor)), b = mesh();
       b.rotation.set(0, 0, 0); b.position.set(actor.x, (box.min.y + box.max.y) / 2, actor.z);
       b.scale.set(0.035, box.max.y - box.min.y, box.max.z - box.min.z);
       if (actor.attack?.move && actor.state === 'attack') {

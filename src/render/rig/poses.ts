@@ -94,11 +94,18 @@ function airborne(pose: CorePose, ctx: PoseContext): void {
   setHand(pose, "R", 0.2, air(-0.5, -0.26), air(0.3, 0.18));
 }
 
+/** Unit direction of travel in the rig's own frame: `ahead` along its facing, `aside` to its right. */
+function heading(ctx: PoseContext): { ahead: number; aside: number } {
+  const { x, z } = ctx.gait.velocity;
+  const speed = Math.hypot(x, z);
+  // Barely moving (the first frame, or a dodge on the spot) reads as a forward dash.
+  return speed > 0.6 ? { ahead: z / speed, aside: x / speed } : { ahead: 1, aside: 0 };
+}
+
 /** The authored pose for the actor's current state, before blending and constraints. */
 export function statePose(ctx: PoseContext): CorePose {
   const { actor, spec, kind } = ctx;
   const pose = restPose(spec);
-  const stance = spec.hipX + 0.03;
   pose.hipY += Math.sin(ctx.time * 2.3) * 0.012;
   pose.chestPitch += Math.sin(ctx.time * 2.3 + 0.6) * 0.012;
   if (kind === "player") carry(pose, ctx.weapon);
@@ -162,29 +169,39 @@ export function statePose(ctx: PoseContext): CorePose {
       pose.carryPitch += 0.25;
       pose.carryYaw -= 0.75;
       break;
-    case "dodge":
-      pose.chestPitch += 0.6;
+    case "dodge": {
+      // The body throws itself the way it is travelling: forward, back or into another lane.
+      const { ahead, aside } = heading(ctx);
+      pose.chestPitch += 0.6 * ahead;
+      pose.chestRoll -= 0.5 * aside;
+      pose.hipRoll -= 0.2 * aside;
       pose.hipY -= 0.14;
       pose.plant = 0;
-      pose.footLZ = 0.42;
-      pose.footRZ = -0.4;
-      pose.footRY = 0.12;
-      pose.footRPitch = 0.7;
-      setHand(pose, "L", -0.1, -0.4, 0.4);
-      setHand(pose, "R", 0.12, -0.45, -0.3);
+      pose.footLZ = 0.42 * ahead;
+      pose.footRZ = -0.4 * ahead;
+      // Into a lane, the foot on that side reaches out and the other trails off the floor.
+      const lead = aside > 0 ? "R" : "L",
+        trail = aside > 0 ? "L" : "R";
+      pose[`foot${lead}X`] += aside * 0.3;
+      pose[`foot${trail}X`] += aside * 0.12;
+      pose[`foot${trail}Y`] += Math.abs(aside) * 0.1;
+      pose.footRY += 0.12 * Math.abs(ahead);
+      pose.footRPitch = 0.7 * Math.abs(ahead);
+      setHand(pose, "L", -0.1, -0.4, 0.4 * ahead);
+      setHand(pose, "R", 0.12, -0.45, -0.3 * ahead);
       pose.carryPitch -= 0.9;
       break;
-    case "wavedash":
-      pose.hipY -= 0.24;
-      pose.chestPitch += 0.38;
-      pose.plant = 0;
-      pose.footLZ = 0.36;
-      pose.footRZ = -0.34;
-      pose.footLX = -stance - 0.08;
-      pose.footRX = stance + 0.08;
-      setHand(pose, "R", 0.16, -0.5, -0.36);
-      pose.carryPitch -= 0.7;
+    }
+    case "airdodge": {
+      const { ahead, aside } = heading(ctx);
+      pose.chestPitch += 0.45 * ahead;
+      pose.chestRoll -= 0.55 * aside;
+      pose.hipRoll -= 0.25 * aside;
+      pose.footLY += 0.1;
+      pose.footRY += 0.14;
+      pose.carryPitch -= 0.6;
       break;
+    }
     case "hurt":
     case "grabbed": {
       pose.chestPitch -= 0.38;

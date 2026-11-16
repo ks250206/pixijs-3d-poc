@@ -128,20 +128,23 @@ describe('movement', () => {
     expect(game.world.player.vy).toBeLessThan(before);
   });
 
-  it('turns a low diagonal-down air dodge into a sliding wavedash', () => {
+  it('lands a low diagonal-down air dodge normally: the wavedash is gone', () => {
     const game = training();
     game.update(1 / 60, frame({ jump: true, jumpHeld: true }));
     step(game, 3, { jumpHeld: true });
     game.update(1 / 60, frame({ dodge: true, dodgeHeld: true, moveX: 1, moveZ: 1 }));
     expect(game.world.lastMove).toBe('AIR DODGE');
-    step(game, 6, { moveX: 1, moveZ: 1, dodgeHeld: true });
+    const events: string[] = [];
+    for (let i = 0; i < 30 && game.world.player.y > 0; i++) {
+      step(game, 1, { moveX: 1, moveZ: 1, dodgeHeld: true });
+      events.push(...game.world.events.map((event) => event.type));
+    }
     expect(game.world.player.y).toBe(0);
-    expect(game.world.player.state).toBe('wavedash');
-    expect(game.world.lastMove).toBe('WAVEDASH');
-    expect(game.world.player.vx).toBeGreaterThan(8);
-    const x = game.world.player.x;
-    step(game, 6);
-    expect(game.world.player.x).toBeGreaterThan(x + 0.5);
+    step(game, 25);
+    expect(game.world.player.state).toBe('idle');
+    expect(game.world.lastMove).toBe('AIR DODGE');
+    expect(events).not.toContain('wavedash');
+    expect(game.world.player.vx).toBe(0);
   });
 
   it('limits air dodging to one use before landing', () => {

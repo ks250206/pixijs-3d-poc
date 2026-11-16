@@ -5,7 +5,7 @@ import type { MoveDefinition } from './combat/moves';
 import type { RunUpgrade, UpgradeChoice } from './upgrades';
 export type ActorKind = 'player' | 'scout' | 'bruiser' | 'gunner' | 'drone' | 'sentinel' | 'charger' | 'leaper' | 'artillery' | 'rider' | 'captain' | 'minion' | 'sniper' | 'sapper' | 'warden' | 'boss';
 export type SupplyChoice = 'repair' | 'power' | 'stock';
-export type ActionState = 'idle' | 'run' | 'jump' | 'fall' | 'recover' | 'attack' | 'charge' | 'dodge' | 'airdodge' | 'wavedash' | 'hurt' | 'grab' | 'grabbed' | 'dead' | 'shield';
+export type ActionState = 'idle' | 'run' | 'jump' | 'fall' | 'recover' | 'attack' | 'charge' | 'dodge' | 'airdodge' | 'hurt' | 'grab' | 'grabbed' | 'dead' | 'shield';
 export type AttackDirection = 'neutral' | 'forward' | 'back' | 'up' | 'down';
 export type AttackKind = 'jab' | 'tilt' | 'smash' | 'dash' | 'aerial' | 'throw' | 'special' | 'enemy';
 export type GamePhase = 'ready' | 'playing' | 'paused' | 'sector-clear' | 'won' | 'lost';
@@ -164,7 +164,7 @@ export interface Effect {
 }
 
 export interface GameEvent {
-  type: 'hit' | 'ko' | 'jump' | 'dodge' | 'smash' | 'special' | 'wave' | 'boss' | 'win' | 'lose' | 'wavedash' | 'grab' | 'throw';
+  type: 'hit' | 'ko' | 'jump' | 'dodge' | 'smash' | 'special' | 'wave' | 'boss' | 'win' | 'lose' | 'grab' | 'throw';
   intensity?: number;
 }
 

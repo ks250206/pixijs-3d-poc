@@ -5,8 +5,9 @@ import { EncounterDirector, emptyCoordination } from './director';
 import { ActionBuffer } from './action-buffer';
 import { createObjective, objectiveProps } from './objectives';
 import { createUpgradeChoices, getUpgradeDefinition, upgradeDescription, upgradeMove, upgradeRank, type UpgradeId } from './upgrades';
-import { playerMove, specialMove, utilityMove, totalFrames, canCancel, type MoveDefinition, type BehaviorId, type CancelAction } from './combat/moves';
+import { playerMove, specialMove, utilityMove, totalFrames, canCancel, popsUp, POP_STUN, type MoveDefinition, type BehaviorId, type CancelAction } from './combat/moves';
 import { sweptContact, sampleWeapon, bodyHurtbox, type Vec3 } from './combat/geometry';
+import { assistedBy, laneAssist } from './combat/assist';
 import { DODGE, DEPTH_LIMIT, PLATFORM_DEPTH } from './movement';
 import { createCandidates, seededRandom } from './loadouts';
 import { createArena, insideProp } from './arena';
@@ -50,7 +51,6 @@ interface ActorMemory {
   forced: number;
   jumps: number;
   airDodgeUsed: boolean;
-  airDodgeDown: boolean;
   recoveryUsed: boolean;
   lastJumpHeld: boolean;
   charge: number;
@@ -525,7 +525,7 @@ export class GameEngine {
 
   private resetMemory(actor: Actor): void {
     this.memories.set(actor.id, {
-      phaseTimer: 0, actionTimer: 0, forced: 0, jumps: 0, airDodgeUsed: false, airDodgeDown: false, recoveryUsed: false, lastJumpHeld: false,
+      phaseTimer: 0, actionTimer: 0, forced: 0, jumps: 0, airDodgeUsed: false, recoveryUsed: false, lastJumpHeld: false,
       upgradeAirUsed: false, upgradeNormalHits: 0, upgradeFlow: 0,
       charge: 0, chargeDirection: 'forward', strike: null,
       comboStage: 0, comboTimer: 0, dashTimer: 0,
@@ -548,7 +548,7 @@ export class GameEngine {
     const ground = this.isGrounded(p);
     const wasJumpHeld = m.lastJumpHeld;
     m.lastJumpHeld = input.jumpHeld;
-    let free = m.actionTimer <= 0 || (p.state === 'wavedash' && p.stateTime > 0.09);
+    let free = m.actionTimer <= 0;
     let cancelled: CancelAction | undefined;
     if (!free && p.state === 'attack' && p.attack?.move && m.strike) {
       const requests: CancelAction[] = [];
@@ -595,22 +595,22 @@ export class GameEngine {
     if (requested('dodge') && (ground || !m.airDodgeUsed)) {
       const dodge = this.actions.consume('dodge', input);
       const magnitude = Math.hypot(dodge.moveX, dodge.moveZ);
+      // Dodges grant no invulnerability: they avoid attacks only by moving out of them.
+      // Up (moveZ < 0) is the far lane (−Z) and down the near lane (+Z), on the ground and in the air.
+      const dirX = magnitude > 0.3 ? dodge.moveX / magnitude : 0, dirZ = magnitude > 0.3 ? dodge.moveZ / magnitude : 0;
       if (ground) {
         p.state = 'dodge'; p.stateTime = 0;
         m.actionTimer = DODGE.groundDuration;
-        p.invulnerable = DODGE.groundInvulnerability;
-        p.vx = magnitude > 0.3 ? dodge.moveX / magnitude * DODGE.groundX : p.facing * DODGE.groundX;
-        p.vz = magnitude > 0.3 ? dodge.moveZ / magnitude * DODGE.groundZ : 0;
+        p.vx = magnitude > 0.3 ? dirX * DODGE.groundX : p.facing * DODGE.groundX;
+        p.vz = dirZ * DODGE.groundZ;
         w.lastMove = 'GROUND DASH';
       } else {
         p.state = 'airdodge'; p.stateTime = 0;
         m.actionTimer = DODGE.airDuration;
         m.airDodgeUsed = true;
-        m.airDodgeDown = dodge.moveZ > 0.3;
-        p.invulnerable = DODGE.airInvulnerability;
-        p.vx = magnitude > 0.3 ? dodge.moveX / magnitude * DODGE.air : 0;
-        p.vy = magnitude > 0.3 ? -dodge.moveZ / magnitude * DODGE.air : 0;
-        p.vz = 0;
+        p.vx = dirX * DODGE.air;
+        p.vy = 0;
+        p.vz = dirZ * DODGE.airZ;
         w.lastMove = 'AIR DODGE';
       }
       w.events.push({ type: 'dodge' });
@@ -678,12 +678,10 @@ export class GameEngine {
     if ((!free && !ordinaryAerial) || p.state === 'airdodge' || p.state === 'dodge') return;
     if (ground && Math.abs(input.moveX) > 0.15) p.facing = input.moveX > 0 ? 1 : -1;
     const speed = (m.dashTimer > 0 ? 10.4 : 6.2) * w.loadout.speed * this.upgradeMovementScale() * relicEffect(this.run?.economy.relics ?? [], 'movement');
-    const sliding = p.state === 'wavedash';
     const targetX = input.moveX * speed;
-    if (!sliding) p.vx = approach(p.vx, targetX, dt * (ground ? 46 : 17));
-    else if (Math.abs(input.moveX) > 0.1 && Math.sign(input.moveX) !== Math.sign(p.vx)) p.vx = approach(p.vx, targetX, dt * 24);
+    p.vx = approach(p.vx, targetX, dt * (ground ? 46 : 17));
     p.vz = approach(p.vz, input.moveZ * 4.4 * w.loadout.speed * this.upgradeMovementScale() * relicEffect(this.run?.economy.relics ?? [], 'movement'), dt * (ground ? 35 : 14));
-    if (!sliding && !ordinaryAerial) p.state = !ground ? p.vy > 0 ? 'jump' : 'fall' : Math.hypot(p.vx, p.vz) > 0.4 ? 'run' : 'idle';
+    if (!ordinaryAerial) p.state = !ground ? p.vy > 0 ? 'jump' : 'fall' : Math.hypot(p.vx, p.vz) > 0.4 ? 'run' : 'idle';
     if (!ground && input.moveZ > 0.65 && p.vy < 0) p.vy = Math.max(-22, p.vy - dt * 55);
   }
 
@@ -806,7 +804,7 @@ export class GameEngine {
     const from = (attack.elapsed - dt) * 60, to = attack.elapsed * 60;
     for (const prop of this.world.props) {
       if (!prop.alive || prop.hp <= 0 || strike.hit.has(prop.id)) continue;
-      const box = { min: { x: prop.x - prop.width / 2, y: 0, z: prop.z - prop.depth / 2 }, max: { x: prop.x + prop.width / 2, y: prop.height, z: prop.z + prop.depth / 2 } };
+      const box = laneAssist({ min: { x: prop.x - prop.width / 2, y: 0, z: prop.z - prop.depth / 2 }, max: { x: prop.x + prop.width / 2, y: prop.height, z: prop.z + prop.depth / 2 } }, assistedBy(actor.kind));
       if (sweptContact(actor, strike.move, from, to, box, previous, checkedPose) !== null) {
         strike.hit.add(prop.id); this.damageProp(prop, strike.damage, actor);
       }
@@ -814,13 +812,19 @@ export class GameEngine {
     const targets = actor.kind === 'player' ? this.world.enemies : [this.world.player];
     for (const target of targets) {
       if (!target.alive || target.invulnerable > 0 || strike.hit.has(target.id) || target.state === 'grabbed') continue;
-      const multiplier = sweptContact(actor, strike.move, from, to, bodyHurtbox(target), previous, checkedPose);
+      // Player strikes get the Z-only lane assist; enemy strikes test the player's exact body box.
+      const multiplier = sweptContact(actor, strike.move, from, to, laneAssist(bodyHurtbox(target), assistedBy(actor.kind)), previous, checkedPose);
       if (multiplier !== null) {
         strike.hit.add(target.id); strike.connected = true;
         const facing = strike.radial ? (target.x >= actor.x ? 1 : -1) : attack.direction === 'back' ? -actor.facing : actor.facing;
         const vault = actor.kind === 'player' && multiplier > 1 && ['jab', 'tilt', 'aerial'].includes(attack.kind) && !['up', 'down'].includes(attack.direction) ? upgradeRank(this.world.upgrades, 'lance-vault') : 0;
         const landed = this.hit(target, actor, strike.damage * multiplier, vault ? 6 + vault * 2 : strike.force * multiplier, strike.growth, vault ? 1.25 : strike.angle, facing as 1 | -1, attack.kind);
         if (actor.kind === 'player' && landed) this.applyWeaponUpgrade(actor, target, strike, multiplier > 1);
+        // A down-normal launcher holds its target long enough for any weapon's up attack to follow.
+        if (actor.kind === 'player' && landed && popsUp(strike.move) && target.state === 'hurt') {
+          const stunned = this.memory(target);
+          stunned.actionTimer = Math.max(stunned.actionTimer, POP_STUN);
+        }
         if (multiplier > 1) this.effect('text', target.x, target.y + 2.3, target.z, 0.5, 1, 0x79cfff, 'TIP HIT');
       }
     }
@@ -1225,7 +1229,7 @@ export class GameEngine {
       for (const target of targets) {
         const data = this.shots.get(shot.id);
         if (!target.alive || target.invulnerable > 0 || shot.life <= 0 || data?.hit?.has(target.id)) continue;
-        if (Math.abs(shot.x - target.x) < 0.55 * target.scale + shot.radius && Math.abs(shot.z - target.z) < 0.5 * target.scale + shot.radius && shot.y > target.y - 0.1 && shot.y < target.y + 1.85 * target.scale) {
+        if (Math.abs(shot.x - target.x) < 0.55 * target.scale + shot.radius && Math.abs(shot.z - target.z) < 0.5 * target.scale + shot.radius + assistedBy(source.kind) && shot.y > target.y - 0.1 && shot.y < target.y + 1.85 * target.scale) {
           const data = this.shots.get(shot.id);
           if (data) {
             // A late projectile can confirm only the exact swing that fired it.
@@ -1438,7 +1442,7 @@ export class GameEngine {
     const wasGrounded = this.isGrounded(actor);
     const beforeX = actor.x, beforeY = actor.y, beforeZ = actor.z;
     const isDroneHovering = actor.kind === 'drone' && m.forced <= 0 && actor.state !== 'hurt' && this.onPlatform(actor);
-    if (!isDroneHovering && !(actor.state === 'airdodge' && actor.stateTime < 0.13)) actor.vy -= GRAVITY * dt;
+    if (!isDroneHovering && !(actor.state === 'airdodge' && actor.stateTime < DODGE.airHang)) actor.vy -= GRAVITY * dt;
     actor.x += actor.vx * dt; actor.y += actor.vy * dt; actor.z += actor.vz * dt;
     this.constrainDepth(actor);
     if (wasGrounded && m.forced <= 0 && actor.state !== 'hurt' && actor.state !== 'airdodge' && beforeX >= this.world.arenaMin && beforeX <= this.world.arenaMax && Math.abs(beforeZ) <= PLATFORM_DEPTH) {
@@ -1448,29 +1452,24 @@ export class GameEngine {
     // Only a downward crossing from the top can land. Moving underneath the
     // platform after falling off must not teleport a fighter back onto it.
     if (this.onPlatform(actor) && beforeY >= 0 && actor.y <= 0 && actor.vy <= 0) {
-      if (actor.state === 'airdodge' && m.airDodgeDown && Math.abs(actor.vx) > 3) {
-        actor.state = 'wavedash'; actor.stateTime = 0;
-        m.actionTimer = 0.4;
-        actor.vx *= 1.08;
-        if (actor.kind === 'player') {
-          this.world.lastMove = 'WAVEDASH';
-          this.world.events.push({ type: 'wavedash' });
-          this.effect('text', actor.x, 1.6, actor.z, 0.9, 1, this.world.loadout.color, 'WAVEDASH');
-          this.effect('trail', actor.x, 0.12, actor.z, 0.5, 2.5, this.world.loadout.color);
-        }
-      } else if (actor.state === 'jump' || actor.state === 'fall' || actor.state === 'airdodge') {
+      // An air dash that reaches the floor simply lands: there is no slide.
+      if (actor.state === 'jump' || actor.state === 'fall' || actor.state === 'airdodge') {
         actor.state = 'idle'; actor.stateTime = 0; m.actionTimer = 0;
       }
       actor.y = 0; actor.vy = 0;
-      m.jumps = 0; m.airDodgeUsed = false; m.airDodgeDown = false; m.recoveryUsed = false;
+      m.jumps = 0; m.airDodgeUsed = false; m.recoveryUsed = false;
     }
     const grounded = actor.y === 0 && this.onPlatform(actor);
-    if (actor.state === 'wavedash') actor.vx *= Math.exp(-dt * 2.5);
-    else if (actor.state === 'hurt') {
+    if (actor.state === 'hurt') {
       const drag = grounded ? 2.2 : 0.12;
       actor.vx *= Math.exp(-dt * drag); actor.vz *= Math.exp(-dt * drag);
     } else if (actor.state === 'dodge') {
-      actor.vx *= Math.exp(-dt * 3.6); actor.vz *= Math.exp(-dt * 3.6);
+      // Ground dash burst: v(t) = v0 · exp(−burstDecay · t).
+      const decay = Math.exp(-dt * DODGE.burstDecay);
+      actor.vx *= decay; actor.vz *= decay;
+    } else if (actor.state === 'airdodge') {
+      // The air lane dash shares the ground burst profile; air X keeps its constant speed.
+      actor.vz *= Math.exp(-dt * DODGE.burstDecay);
     } else if (actor.state === 'attack' && !['phase', 'rush', 'leap'].includes(actor.attack?.move?.behavior ?? '') && actor.attack?.kind !== 'dash') {
       actor.vx *= Math.exp(-dt * (grounded ? 14 : 0.8));
       actor.vz *= Math.exp(-dt * (grounded ? 14 : 0.8));

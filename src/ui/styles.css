@@ -111,7 +111,6 @@ canvas { display: block; }
 .move-readout { position: absolute; bottom: 83px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; flex-direction: column; gap: 6px; max-width: 35%; }
 .move-readout .micro-label { font-size: 7px; color: #789399; letter-spacing: 1.4px; }
 .move-readout > b { font: 900 15px var(--display); letter-spacing: -.1px; color: #e3f0ea; white-space: nowrap; }
-.move-readout > b.is-wavedash { color: var(--cyan); text-shadow: 0 0 15px #86ffe277; }
 .runtime { display: flex; align-items: center; gap: 5px; margin-top: 7px; font: 7px var(--mono); letter-spacing: .7px; color: #627d86; }
 .runtime .status-dot { width: 3px; height: 3px; }
 .controls-footer { position: absolute; bottom: 23px; left: 34px; right: 34px; display: flex; justify-content: center; align-items: center; gap: clamp(10px, 1.5vw, 25px); border-top: 1px solid #77979b23; padding-top: 13px; color: #9cb0b5; font: 8px var(--mono); letter-spacing: .6px; }
@@ -206,12 +205,6 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
 .help-grid dd { margin: 5px 0 0; font-size: 10px; color: #8ba6af; line-height: 1.65; }
 .help-grid kbd { font-size: 9px; padding: 3px 5px; color: #d4e8e6; }
 .help-note { font-size: 9px; line-height: 1.8; color: #7c9ca5; margin-top: 13px; }
-.wavedash-tip { border: 1px solid #6aa79b4d; background: #86ffe209; padding: 12px 13px; margin-top: 13px; }
-.wavedash-tip > b { font: 9px var(--mono); letter-spacing: .7px; color: var(--cyan); }
-.wavedash-tip p { font-size: 10px; line-height: 1.7; color: #aac3c6; margin: 8px 0; }
-.wavedash-tip p b { color: #e2f0e8; font-weight: 500; }
-.wavedash-tip > span { display: flex; align-items: center; gap: 8px; color: #81a9a9; font-size: 11px; }
-.wavedash-tip > span i { font-style: normal; }
 .gamepad-guide { margin-top: 22px; padding-top: 17px; display: flex; gap: 15px; align-items: center; border-top: 1px solid #829ca32e; }
 .gamepad-guide svg { width: 33px; height: 33px; color: #8fb4b3; flex-shrink: 0; }
 .gamepad-guide p { margin: 0; }
@@ -612,10 +605,11 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
 }
 
 /* Campaign route: readable encounter cards, with one supply decision per stop. */
-.route-dialog { width: min(1120px, 100%); padding: 32px; }
+.route-dialog { width: min(1400px, 100%); padding: 32px; }
 .route-dialog h2 { font-size: clamp(22px, 3vw, 34px); letter-spacing: -1px; }
 .route-intro { color: #9db9bf; font-size: 12px; line-height: 1.8; margin: 4px 0 26px; }
 .route-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (min-width: 1200px) { .route-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); } }
 .route-node { position: relative; min-width: 0; border: 1px solid #30454c; border-top: 3px solid var(--node-color); padding: 15px 12px; background: #0b1821; }
 .route-node.current, .route-node.next { background: #142b32; box-shadow: 0 0 0 1px var(--node-color); }
 .route-node.locked { opacity: .65; }
@@ -630,17 +624,17 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
 .route-encounters i { font: 9px var(--mono); color: var(--node-color); }
 .route-node footer { border-top: 1px solid #30454c; margin-top: 14px; padding-top: 12px; font: 8px/1.8 var(--mono); color: #7e9ca5; overflow-wrap: anywhere; }
 .route-supply { margin-top: 24px; padding: 20px; border: 1px solid #3e655e; background: #122b27; }
-.route-supply p { color: #a8c5be; font-size: 11px; }
+.route-supply p { color: #a8c5be; font-size: 13px; line-height: 1.6; margin: 6px 0 0; }
 .supply-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
-.supply-options button { text-align: left; border: 1px solid #456d64; background: #0d201e; color: #d6ebe3; padding: 14px 16px; cursor: pointer; }
+.supply-options button { min-height: 48px; text-align: left; border: 1px solid #456d64; background: #0d201e; color: #d6ebe3; padding: 11px 16px; cursor: pointer; }
 .supply-options b, .supply-options span { display: block; }
-.supply-options b { font-size: 13px; margin-bottom: 7px; }
-.supply-options span { font-size: 10px; color: #99bdb1; }
+.supply-options b { font-size: 14px; margin-bottom: 3px; }
+.supply-options span { font-size: 13px; color: #99bdb1; }
 .supply-options button:hover:not(:disabled), .supply-options button:focus-visible { border-color: #71e5ba; background: #1a3a30; }
 .supply-options button:disabled { opacity: .5; cursor: default; }
 .supply-options button.chosen { opacity: 1; border-color: #71e5ba; }
 .route-footer { display: flex; justify-content: space-between; gap: 20px; align-items: center; margin-top: 22px; }
-.route-footer p { font-size: 11px; color: #a4bcc1; line-height: 1.8; }
+.route-footer p { font-size: 13px; color: #a4bcc1; line-height: 1.6; margin: 0; }
 .route-footer button { flex-shrink: 0; }
 .wave-row { flex-wrap: wrap; gap: 10px; line-height: 1.5; }
 .wave-row > span { max-width: 100%; }
@@ -725,29 +719,55 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
 .module-guide span, .loadout-guide li span, .loadout-guide > p { font-size: 11px; color: #9db7bd; line-height: 1.7; margin-top: 5px; }
 .loadout-guide ul { padding-left: 18px; display: grid; gap: 12px; }
 
-/* Put the decision before the route overview at every cleared sector. */
-.reward-dialog { width: min(980px, 100%); }
-.reward-dialog .route-intro { margin-bottom: 18px; }
-.reward-heading h3 { font: 800 22px var(--display); margin: 9px 0 6px; color: #dffff4; }
-.reward-heading p, .upgrade-status { font-size: 12px; line-height: 1.7; color: #aacbc3; margin: 0; }
-.upgrade-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0 12px; }
-.upgrade-card { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; min-height: 202px; text-align: left; padding: 17px; border: 1px solid #456c69; background: linear-gradient(145deg, #173b3b, #0c202a); color: #e4fff6; cursor: pointer; }
-.upgrade-kind { font: 8px var(--mono); letter-spacing: .7px; color: #7fd5c7; margin-bottom: 18px; }
-.upgrade-card > small { color: #8aaeb2; font: 9px var(--mono); }
-.upgrade-card > b { font-size: 17px; margin-top: 7px; }
-.upgrade-card p { font-size: 12px; line-height: 1.85; color: #c0d4d3; margin: 12px 0 18px; }
-.upgrade-rank { font: 10px var(--mono); color: #77dfbe; margin-top: auto; }
+/* Put the decision before the route overview at every cleared sector.
+   Wide screens keep every choice and the departure button on one screen:
+   the cards sit in a row, their meta labels share a line, and the supply
+   copy sits beside its options instead of above them. */
+.reward-dialog { width: min(1400px, 100%); padding: 26px 32px 0; scroll-padding-bottom: 96px; }
+.reward-dialog .dialog-heading h2 { font-size: clamp(22px, 2.4vw, 30px); margin-top: 6px; }
+.reward-dialog .route-intro { font-size: 13px; margin: 2px 0 14px; }
+.reward-heading { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 16px; }
+.reward-heading .dialog-eyebrow { flex-basis: 100%; }
+.reward-heading h3 { font: 800 20px var(--display); margin: 6px 0 0; color: #dffff4; }
+.reward-heading p, .upgrade-status { font-size: 13px; line-height: 1.6; color: #aacbc3; margin: 0; }
+.upgrade-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0 8px; }
+.upgrade-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "kind rank" "small small" "name name" "desc desc"; align-content: start; column-gap: 12px; min-width: 0; min-height: 44px; text-align: left; padding: 14px 16px; border: 1px solid #456c69; background: linear-gradient(145deg, #173b3b, #0c202a); color: #e4fff6; cursor: pointer; }
+.upgrade-kind { grid-area: kind; font: 9px var(--mono); letter-spacing: .7px; color: #7fd5c7; margin-bottom: 8px; }
+.upgrade-card > small { grid-area: small; color: #8aaeb2; font: 10px var(--mono); }
+.upgrade-card > b { grid-area: name; font-size: 17px; margin-top: 2px; }
+.upgrade-card p { grid-area: desc; font-size: 13px; line-height: 1.7; color: #c0d4d3; margin: 6px 0 0; }
+.upgrade-rank { grid-area: rank; font: 10px var(--mono); color: #77dfbe; text-align: right; white-space: nowrap; }
 .upgrade-card:hover:not(:disabled), .upgrade-card:focus-visible { border-color: #8affda; background: #204b43; outline: 2px solid #8affda; outline-offset: 2px; }
 .upgrade-card:disabled { opacity: .45; cursor: default; }
 .upgrade-card.chosen { opacity: 1; border-color: #8affda; box-shadow: inset 0 3px 0 #8affda; }
 .upgrade-status { min-height: 21px; }
-.reward-dialog .route-supply { margin-top: 18px; padding: 15px; }
-.reward-dialog .supply-options { margin-top: 10px; }
+.reward-dialog .route-supply { margin-top: 12px; padding: 14px 16px; display: grid; grid-template-columns: minmax(180px, .7fr) minmax(0, 2fr); gap: 10px 18px; align-items: center; }
+.reward-dialog .supply-options { margin-top: 0; }
 .route-overview { margin-top: 22px; }
-.route-overview summary { cursor: pointer; font-size: 12px; color: #a1c4c3; padding: 10px 0; }
+.reward-dialog .route-overview { margin-top: 6px; }
+.route-overview summary { cursor: pointer; font-size: 13px; color: #a1c4c3; padding: 12px 0; }
 .route-overview[open] summary { margin-bottom: 14px; }
 .route-footer button:disabled { opacity: .45; cursor: default; }
-.reward-dialog .route-footer { position: sticky; bottom: -32px; padding: 15px 0; background: #101e27f5; border-top: 1px solid #45605b; z-index: 1; }
+.reward-dialog .route-footer { position: sticky; bottom: 0; margin-top: 4px; padding: 12px 0 18px; background: #101e27f5; border-top: 1px solid #45605b; z-index: 1; }
+.reward-dialog .route-footer button { min-height: 44px; font-size: 13px; }
+@media (max-width: 800px) {
+  .reward-dialog { padding: 20px 18px 0; }
+  .reward-dialog .route-supply { grid-template-columns: 1fr; }
+  .reward-dialog .route-footer { flex-direction: row; flex-wrap: wrap; align-items: center; padding: 10px 0 14px; }
+  .reward-dialog .route-footer p { flex: 1 1 140px; }
+  .reward-dialog .route-footer button { flex: 1 0 auto; justify-content: center; }
+}
+/* Landscape phones: open with the three upgrades in view above the sticky departure. */
+@media (max-height: 560px) and (min-width: 561px) {
+  .modal-backdrop:has(.reward-dialog) { padding-block: 10px; }
+  .reward-dialog { max-height: calc(100dvh - 20px); padding: 14px 22px 0; }
+  .reward-dialog .dialog-heading h2 { font-size: 20px; margin-top: 4px; }
+  .reward-dialog .route-intro { margin: 0 0 6px; }
+  .reward-heading h3 { font-size: 16px; margin-top: 2px; }
+  .reward-dialog .upgrade-options { margin-top: 8px; }
+  .reward-dialog .upgrade-card { padding: 9px 12px; }
+  .reward-dialog .route-footer { padding: 8px 0 10px; }
+}
 @media (max-width: 800px) {
   .sector-card { width: 178px; }
   .sector-card h2 { font-size: 16px; }
@@ -755,18 +775,19 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
   .combat-counter > span:last-child { font-size: 9px; }
   .announcer { top: 24%; }
   .boss-card { padding: 7px 9px; }
-  .reward-dialog .route-footer { bottom: -24px; }
-  .upgrade-card { padding: 14px; }
+  .upgrade-card { padding: 12px 14px; }
 }
 @media (max-width: 560px) {
-  .upgrade-options { grid-template-columns: 1fr; gap: 10px; }
-  .upgrade-card { min-height: 0; padding: 15px; }
-  .upgrade-kind { margin-bottom: 10px; }
-  .upgrade-card p { margin: 9px 0 12px; }
+  .upgrade-options { grid-template-columns: 1fr; gap: 8px; margin: 10px 0 6px; }
+  .upgrade-card { padding: 11px 13px; }
+  .upgrade-kind { margin-bottom: 4px; }
+  .upgrade-card > b { font-size: 16px; }
+  .upgrade-card p { margin-top: 3px; line-height: 1.6; }
+  .reward-dialog .route-intro { margin-bottom: 10px; }
   .module-guide { grid-template-columns: 1fr; }
   .recovery-row, .recovery-row b { font-size: 9px; }
   .build-summary { font-size: 8px; }
-  .reward-heading h3 { font-size: 20px; }
+  .reward-heading h3 { font-size: 18px; }
 }
 @media (max-height: 520px) and (min-width: 560px) {
   .sector-card { top: 58px; width: 158px; }
@@ -782,7 +803,6 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
   .recovery-row { margin-top: 5px; }
   .recovery-row, .recovery-row b { font-size: 8px; }
   .build-summary { min-height: 23px; font-size: 7px; padding-top: 4px; }
-  .upgrade-card { min-height: 185px; }
 }
 
 /* Roguelite operation map. Namespaced to keep the campaign map independent. */
@@ -790,7 +810,7 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
   --route-mint: #b5f4cf;
   --route-muted: #99aba8;
   --route-line: #ffffff14;
-  position: fixed; z-index: 1500; inset: 82px max(24px, calc((100vw - 1200px) / 2)) 24px;
+  position: fixed; z-index: 1500; inset: 82px max(2vw, calc((100vw - 1400px) / 2)) 24px;
   display: flex; flex-direction: column; color: #ebf2eb; background: #101917;
   border: 1px solid #5a756754; border-radius: 12px; box-shadow: 0 30px 100px #0009;
   overflow: hidden; pointer-events: auto; font: 13px/1.65 Arial, 'Hiragino Kaku Gothic ProN', sans-serif;
@@ -820,7 +840,7 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
 .rogue-resources .rogue-scrap > span { color: #ebd89e; font: 10px var(--mono); letter-spacing: 1px; }
 .rogue-resources .rogue-weapon { margin-left: auto; }
 .rogue-weapon b { font-size: 13px; }
-.rogue-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: minmax(0, 1fr) auto; }
+.rogue-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 360px; grid-template-rows: minmax(0, 1fr) auto; }
 .rogue-map-section { grid-row: 1 / 3; min-height: 0; display: flex; flex-direction: column; position: relative; border-right: 1px solid var(--route-line); background: radial-gradient(ellipse at 50% 75%, #28453745, transparent 70%), #0d1512; }
 .rogue-map-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 22px 26px 10px; }
 .rogue-map-heading h3 { margin-top: 4px; font-size: 21px; line-height: 1.3; letter-spacing: 1px; }
@@ -831,7 +851,7 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
 .rogue-map-guide > span:last-child { color: var(--route-mint); }
 .rogue-map-guide i { display: inline-block; width: 5px; height: 5px; background: var(--route-mint); border-radius: 50%; vertical-align: 2px; margin-right: 5px; }
 .rogue-map-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #536b59 transparent; background-image: radial-gradient(#b5f4cf14 .6px, transparent .6px); background-size: 20px 20px; }
-.route-map { position: relative; width: min(100%, 580px); height: max(440px, 100%); margin: 0 auto; }
+.route-map { position: relative; width: min(100%, 880px); height: max(440px, 100%); margin: 0 auto; }
 .rogue-connections { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; }
 .rogue-edge { stroke: #4f6557; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 .rogue-edge.locked { stroke: #293b31; stroke-dasharray: 3 5; }
@@ -891,17 +911,24 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
 .rogue-build p b { color: #dfebdf; }
 .rogue-actions { margin-top: 24px; border-top: 1px solid var(--route-line); padding-top: 20px; }
 .rogue-actions h4 { font-size: 15px; margin-bottom: 10px; }
-.rogue-actions button { display: block; width: 100%; padding: 13px 14px; margin-top: 10px; text-align: left; font-size: 12px; line-height: 1.7; }
-.rogue-actions button b { display: block; font-size: 13px; font-weight: 500; }
-.rogue-actions button span { display: block; color: #b8c7ba; margin-top: 4px; font-size: 11px; }
+.rogue-actions button { display: block; width: 100%; min-height: 44px; padding: 12px 14px; margin-top: 10px; text-align: left; font-size: 13px; line-height: 1.6; }
+.rogue-actions button b { display: block; font-size: 14px; font-weight: 500; }
+.rogue-actions button span { display: block; color: #b8c7ba; margin-top: 4px; font-size: 13px; }
+.rogue-choices { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 12px; }
+.rogue-panel .rogue-choices button { margin-top: 0; }
+.rogue-actions > .rogue-text-button { width: auto; min-height: 44px; margin-top: 6px; }
 .rogue-actions button:not(:disabled):hover { background: #2a4231; border-color: var(--route-mint); }
 .rogue-actions button:disabled { color: #84958a; border-color: #344339; background: #142019; }
 .rogue-actions button:disabled span { color: #84958a; }
 .rogue-actions .rogue-price { color: #ebd89e; font-family: var(--mono); }
+.rogue-panel [data-buy] { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; align-content: start; }
+.rogue-panel [data-buy] .rogue-price { grid-column: 2; grid-row: 1; margin: 1px 0 0; white-space: nowrap; }
+.rogue-panel [data-buy] :is(.rogue-effect, .rogue-reason) { grid-column: 1 / -1; }
+.rogue-panel [data-buy] .rogue-reason { color: #e8c6ac; }
 .rogue-detail .rogue-confirmed { padding: 12px; background: #b5f4cf09; border-left: 2px solid var(--route-mint); color: #c5e6ca; }
 .rogue-combat-note { margin-top: 20px !important; }
 .rogue-departure { padding: 20px 24px; border-top: 1px solid var(--route-line); background: #15231b; }
-.rogue-departure p { margin: 4px 0 14px; font-size: 12px; }
+.rogue-departure p { margin: 4px 0 14px; font-size: 13px; }
 .rogue-panel .rogue-primary { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 48px; padding: 12px 16px; color: #15291c; background: var(--route-mint); border-color: var(--route-mint); font-size: 13px; font-weight: 700; }
 .rogue-panel .rogue-primary > span { font: 22px/1 var(--mono); }
 .rogue-panel .rogue-primary:not(:disabled):hover { background: #d2ffdf; }
@@ -919,11 +946,60 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
 [data-run-save] button:disabled { opacity: .4; }
 .rogue-warning { position: fixed; z-index: 2001; top: 56px; left: 12px; right: 12px; padding: 12px; color: #fff; background: #803022; border: 2px solid #ffc588; font: 14px/1.5 sans-serif; pointer-events: none; }
 .rogue-open .play-hud, .rogue-open .controls-footer, .rogue-open .touch-controls { visibility: hidden; }
+/* Wide route map: the panel takes most of the viewport, the route guide and
+   legend move into a side rail, and the graph spreads across the extra width.
+   During a decision (shop, event, rest, treasure, post-battle reward) the
+   map becomes a compact overview and the choices get the wide column, laid
+   out in a grid so they and the departure button fit without scrolling. */
+@media (min-width: 761px) {
+  .rogue-map-section { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto minmax(0, 1fr); }
+  .rogue-map-heading { grid-column: 1; grid-row: 1; padding-bottom: 12px; }
+  .rogue-map-guide { grid-column: 2; grid-row: 1; flex-direction: column; justify-content: flex-end; gap: 4px; padding: 0 22px 12px 18px; border-left: 1px solid var(--route-line); font-size: 11px; white-space: nowrap; }
+  .rogue-map-scroll { grid-column: 1; grid-row: 2; }
+  .rogue-legend { grid-column: 2; grid-row: 2; min-height: 0; overflow: auto; flex-direction: column; flex-wrap: nowrap; justify-content: flex-start; gap: 12px; padding: 14px 22px 14px 18px; border-top: 0; border-left: 1px solid var(--route-line); }
+  .rogue-legend > span { font-size: 11px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-layout { grid-template-columns: minmax(0, .64fr) minmax(0, 1.36fr); }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) :is(.rogue-map-guide, .rogue-legend) { display: none; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-map-scroll { grid-column: 1 / -1; container: rogue-overview / size; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .route-map { height: 100%; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-detail { padding: 20px 28px; }
+  /* Destination becomes one summary row: icon, name and place, reward. */
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-destination { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, max-content); column-gap: 14px; align-items: center; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-destination > .rogue-kicker { display: none; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-destination-heading { display: contents; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-destination-icon { grid-column: 1; grid-row: 1 / span 2; width: 46px; height: 48px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-destination-heading > div { grid-column: 2; grid-row: 1; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-destination h3 { font-size: 21px; line-height: 1.3; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-location { grid-column: 2; grid-row: 2; margin: 0; }
+  /* The generic "what this stop is" copy repeats the action heading below. */
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-destination > p:not(.rogue-location, .rogue-threat) { display: none; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-threat { grid-column: 1 / -1; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-reward-preview { grid-column: 3; grid-row: 1 / span 2; margin: 0; max-width: 300px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-actions { margin-top: 16px; padding-top: 14px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-actions h4 { margin-bottom: 2px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-choices { grid-template-columns: repeat(auto-fit, minmax(max(190px, calc((100% - 20px) / 3)), 1fr)); }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-build { margin-top: 16px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-build summary { padding: 11px 0; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-departure { display: flex; align-items: center; gap: 20px; padding: 12px 28px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-departure > div { flex: 1; min-width: 0; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-departure p { margin: 2px 0 0; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-primary { width: min(300px, 45%); flex-shrink: 0; }
+}
+/* A short overview hides node captions; icons and states stay readable. */
+@container rogue-overview (max-height: 480px) {
+  .rogue-node-label, .rogue-node-current { display: none; }
+  .rogue-panel .rogue-map-node { height: 44px; }
+}
 @media (min-width: 761px) and (max-height: 780px) {
-  .rogue-panel { inset-block: 64px 12px; }
-  .rogue-heading { padding-block: 14px; }
-  .rogue-map-heading { padding-top: 14px; }
-  .rogue-resources { padding-block: 9px; }
+  /* The toolbar is inert while the route is open, so short screens use its row. */
+  .rogue-panel { inset: 12px max(2vw, calc((100vw - 1400px) / 2)); }
+  .rogue-heading { padding-block: 10px; }
+  .rogue-heading h2 { font-size: 23px; margin-top: 2px; }
+  .rogue-acts li > span { width: 28px; height: 28px; }
+  .rogue-map-heading { padding-top: 12px; }
+  .rogue-resources { padding-block: 7px; }
+  .rogue-footer { padding-block: 2px; }
+  .rogue-footer .rogue-text-button { padding-block: 6px; }
 }
 @media (max-width: 1000px) {
   .rogue-acts { gap: 14px; }
@@ -947,7 +1023,7 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
   .rogue-resources b { font-size: 17px; }
   .rogue-resources .rogue-scrap { padding-right: 12px; }
   .rogue-resources .rogue-weapon { display: none; }
-  .rogue-layout { display: flex; flex-direction: column; overflow: auto; overscroll-behavior: contain; }
+  .rogue-layout { display: flex; flex-direction: column; overflow: auto; overscroll-behavior: contain; scroll-padding-bottom: 96px; }
   .rogue-map-section { flex: 0 0 auto; border-right: 0; border-bottom: 1px solid var(--route-line); }
   .rogue-map-heading { padding: 16px 18px 8px; }
   .rogue-map-heading h3 { font-size: 18px; }
@@ -981,6 +1057,17 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
   .rogue-warning { top: 0; font-size: 12px; }
   .launch-row { flex-wrap: wrap; }
   .rogue-panel[data-phase="node"] .rogue-map-scroll, .rogue-panel[data-phase="reward"] .rogue-map-scroll { height: 150px; }
+  /* The panel opens scrolled to the decision; keep the choices above the sticky departure bar. */
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-detail { padding-block: 16px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-destination-heading { margin-bottom: 4px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-destination > p:not(.rogue-location, .rogue-threat) { display: none; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-location { margin-bottom: 0; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-reward-preview { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; margin-top: 8px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-reward-preview span { margin: 0; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-actions { margin-top: 14px; padding-top: 12px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-actions h4 { margin-bottom: 2px; }
+  .rogue-choices { gap: 8px; margin-top: 10px; }
+  .rogue-panel .rogue-choices button { padding: 10px 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .rogue-panel button { transition: none; }
@@ -995,4 +1082,22 @@ kbd { display: inline-block; padding: 3px 5px; border: 1px solid #8ba6ad4d; bord
   .rogue-departure { padding: 12px 20px; }
   .rogue-departure p { margin-bottom: 8px; }
   .rogue-footer { padding-block: 4px; }
+  .rogue-heading { padding-block: 8px; }
+  .rogue-heading .rogue-kicker, .rogue-departure .rogue-kicker { display: none; }
+  .rogue-heading h2 { font-size: 19px; margin-top: 0; }
+  .rogue-acts li > span { width: 26px; height: 26px; }
+  .rogue-map-heading h3 { font-size: 18px; }
+  /* Node captions already name every stop; the side rail would squeeze the graph. */
+  .rogue-map-guide, .rogue-legend { display: none; }
+  .rogue-map-scroll { grid-column: 1 / -1; }
+  .rogue-resources { padding-block: 6px; }
+  /* Decisions on a landscape phone use the whole width; the map returns after. */
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-layout { grid-template-columns: minmax(0, 1fr); }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-map-section { display: none; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-detail { padding: 12px 20px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-destination > .rogue-kicker { display: none; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-departure { padding: 8px 20px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-actions { padding-top: 8px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-choices { margin-top: 8px; }
+  .rogue-panel:is([data-phase="node"], [data-phase="reward"]) .rogue-choices button { padding: 8px 12px; }
 }

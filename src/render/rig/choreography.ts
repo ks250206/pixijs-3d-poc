@@ -8,6 +8,8 @@ export interface Strike {
   kind: AttackKind;
   direction: AttackDirection;
   trajectory: "slash" | "thrust" | "orbit" | "burst";
+  /** Plane of an authored up/down arc, if the move sweeps one. */
+  plane: "vertical" | "level" | null;
   /** Move clock: 0–1 wind-up, 1–2 live hit frames, 2–3 recovery. */
   clock: number;
   /** Rig-space unit direction of the weapon, pivot to tip. */
@@ -93,7 +95,8 @@ export function strikePose(pose: CorePose, s: Strike): void {
   const c = s.clock;
   const side = s.main === "R" ? 1 : -1;
   const off = s.main === "R" ? "L" : "R";
-  const spin = s.trajectory === "orbit" || s.trajectory === "burst";
+  // A wheel in the vertical plane is swung overhead, not spun round with.
+  const spin = (s.trajectory === "orbit" || s.trajectory === "burst") && s.plane !== "vertical";
   const thrust = s.trajectory === "thrust" && s.direction !== "up" && s.direction !== "down";
   // 0 → 1 across the wind-up, held through the strike, released over the recovery.
   const engaged = track(c, [[0, 0], [0.5, 1], [2.3, 1], [3, 0]]); // prettier-ignore
@@ -105,13 +108,19 @@ export function strikePose(pose: CorePose, s: Strike): void {
   const hipTurn = s.turn * follow * (spin ? 1 : mix(0.42, 0.62, around));
   pose.hipYaw += hipTurn;
   pose.chestYaw += spin ? 0 : s.turn * follow * mix(0.5, 0.3, around);
-  const elevation = Math.asin(clamp(s.aim.y, -1, 1));
-  pose.chestPitch -= elevation * 0.2 * commit * engaged;
+  if (s.plane === "vertical") {
+    // An overhead arc bends the trunk with it: back as the weapon passes over and behind the
+    // head, forward as it sweeps underneath.
+    const around = Math.atan2(s.aim.y, s.aim.z);
+    pose.chestPitch -= clamp(around, -1.3, 2.7) * 0.17 * commit * engaged;
+    pose.hipPitch -= clamp(around, -1.3, 2.7) * 0.05 * commit * engaged;
+  } else pose.chestPitch -= Math.asin(clamp(s.aim.y, -1, 1)) * 0.2 * commit * engaged;
 
   // --- Weight transfer.
   const up = s.direction === "up";
   const low = s.direction === "down" && !s.airborne;
-  const sink = up ? 0.03 : low ? w.sink - 0.1 : w.sink;
+  // A mowing sweep gets right down to the blade's height.
+  const sink = up ? 0.03 : low ? w.sink - (s.plane === "level" ? 0.22 : 0.1) : w.sink;
   const lean = up ? -0.12 : low ? w.lean + 0.14 : w.lean;
   const shift = track(c, [[0, 0], [0.6, -w.back], [1, -w.back * 0.3], [1.5, w.drive], [2.2, w.drive * 0.7], [3, 0]]); // prettier-ignore
   const height = track(c, [[0, 0], [0.6, w.coil], [1.5, sink], [2.3, sink * 0.6], [3, 0]]); // prettier-ignore
