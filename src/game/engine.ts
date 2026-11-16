@@ -4,7 +4,7 @@ import { createRun, availableNodes, encounterRoster, nodeSeed, type RunState, ty
 import { EncounterDirector, emptyCoordination } from './director';
 import { ActionBuffer } from './action-buffer';
 import { createObjective, objectiveProps } from './objectives';
-import { createUpgradeChoices, getUpgradeDefinition, upgradeMove, upgradeRank, type UpgradeId } from './upgrades';
+import { createUpgradeChoices, getUpgradeDefinition, upgradeDescription, upgradeMove, upgradeRank, type UpgradeId } from './upgrades';
 import { playerMove, specialMove, utilityMove, totalFrames, canCancel, type MoveDefinition, type BehaviorId, type CancelAction } from './combat/moves';
 import { sweptContact, sampleWeapon, bodyHurtbox, type Vec3 } from './combat/geometry';
 import { DODGE, DEPTH_LIMIT, PLATFORM_DEPTH } from './movement';
@@ -183,7 +183,7 @@ export class GameEngine {
       this.beginEncounter(r.events.resolved[n.id]?.combat?{...n,kind:'elite'}:n);
     } else {
       w.phase='sector-clear';
-      w.upgradeChoices=checkpoint.reward.ids.map(id=>{const d=getUpgradeDefinition(id);const rank=upgradeRank(w.upgrades,id);return {...d,rank,nextRank:rank+1};});
+      w.upgradeChoices=checkpoint.reward.ids.map(id=>{const d=getUpgradeDefinition(id);const rank=upgradeRank(w.upgrades,id);return {...d,rank,nextRank:rank+1,description:upgradeDescription(id,rank+1,w.loadout)};});
       w.upgradeClaimed=checkpoint.reward.claimed;
     }
     this.touchRun();
@@ -223,7 +223,7 @@ export class GameEngine {
     w.player = this.makeActor('player', w.cameraX - 5, 0); w.player.damage = r.resources.damage; w.player.invulnerable = 1.8;
     w.stocks = r.resources.stocks; w.score = r.resources.score; w.kills = r.resources.kills; w.loadout = structuredClone(r.resources.loadout); w.upgrades = structuredClone(r.resources.upgrades);
     w.enemies = []; w.projectiles = []; w.hazards = []; w.effects = []; w.pendingSpawns = [];
-    w.objective = createObjective(node.theme, 'training'); w.objective.label = `ACT ${node.act} / ${node.kind.toUpperCase()} — 単発遭遇`;
+    w.objective = createObjective(node.theme, 'training'); w.objective.label = `ACT ${node.act} / ${node.kind.toUpperCase()} — 敵と増援を全滅して突破`;
     w.props = createArena(node.theme).map(prop => ({ ...prop, id: `${node.id}:${prop.id}` })); w.coordination = emptyCoordination();
     w.upgradeChoices = []; w.upgradeClaimed = false; w.phase = 'playing';
     this.spawnWave();

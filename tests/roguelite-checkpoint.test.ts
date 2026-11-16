@@ -192,3 +192,45 @@ describe("versioned transaction checkpoints", () => {
     expect(s.getItem(SAVE_KEY)).toBe("broken");
   });
 });
+
+it("actual weighted unknown resolutions survive a validated checkpoint without reroll", () => {
+  for (let seed = 1; seed <= 100; seed++) {
+    const s = storage(),
+      g = new GameEngine(seed),
+      save = new RunPersistence(g, () => s);
+    g.start(createCandidates(seed)[0]!, "roguelite");
+    g.run!.map[0]!.kind = "unknown";
+    g.selectNode("1-0-0");
+    g.travelNode();
+    const before = structuredClone(g.run!.events);
+    expect(save.result.kind).toBe("active");
+    const restored = reload(s).g;
+    expect(restored.run!.events).toEqual(before);
+  }
+});
+
+it("reward reload retains concrete next-rank and module effect descriptions", () => {
+  const { s, g } = setup();
+  // Stop at the actual reward boundary without claiming/skipping.
+  for (let i = 0; i < 900 && g.run!.phase === "combat"; i++) {
+    g.world.player.invulnerable = 100;
+    g.world.enemies.forEach((e) => {
+      e.x = g.world.arenaMax + 8;
+    });
+    g.update(1 / 60);
+  }
+  expect(g.world.upgradeClaimed).toBe(false);
+  const original = g.world.upgradeChoices.map((c) => ({
+    id: c.id,
+    nextRank: c.nextRank,
+    description: c.description,
+  }));
+  const h = reload(s).g;
+  expect(
+    h.world.upgradeChoices.map((c) => ({
+      id: c.id,
+      nextRank: c.nextRank,
+      description: c.description,
+    })),
+  ).toEqual(original);
+});

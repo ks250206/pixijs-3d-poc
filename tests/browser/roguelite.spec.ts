@@ -20,6 +20,9 @@ test("route selection is confirmed separately and core theme resets across encou
   await expect(page.locator("[data-rogue=travel]")).toBeEnabled();
   await page.locator("[data-rogue=travel]").click();
   await expect(page.locator(".rogue-panel")).toBeHidden();
+  await expect(page.locator("[data-hud=wave]")).toHaveText("ENCOUNTER 1 / 1");
+  await expect(page.locator("[data-hud=objective]")).toContainText("敵と増援を全滅");
+  await expect(page.locator("[data-hud=objective]")).not.toContainText("リレー");
   const result = await page.evaluate(() => {
     const { engine: g, scene } = window.__UPRISING__;
     const counts = [];
@@ -153,6 +156,10 @@ for (const width of [1200, 390])
       g.selectNode(id);
       g.travelNode();
     });
+    await page.locator(".rogue-panel").evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(page.locator("[data-event=leave]")).toBeAttached();
     await page.locator(".rogue-panel").evaluate((el) => {
       el.scrollTop = el.scrollHeight;
     });

@@ -235,3 +235,52 @@ describe("review regression coverage", () => {
     expect(g.run!.economy.scrap).toBe(38);
   });
 });
+
+it("a fully capped combat reward can leave safely for every weapon", () => {
+  for (const loadout of createCandidates(32)) {
+    const g = node("battle");
+    g.world.loadout = loadout;
+    g.world.upgrades = UPGRADE_DEFINITIONS.filter(
+      (u) => u.weapon === "all" || u.weapon === loadout.weapon,
+    ).map((u) => ({ id: u.id, rank: u.maxRank }));
+    clearEncounter(g);
+    expect(g.world.upgradeChoices).toEqual([]);
+    expect(g.world.upgradeClaimed).toBe(true);
+    expect(g.completeNode()).toBe(true);
+  }
+});
+
+it("elite floor hazards scale once at impact and clear on restart", () => {
+  const g = node("elite", "damage"),
+    p = g.world.player,
+    e = g.world.enemies[0]!;
+  Object.assign(p, { x: 0, y: 0, z: 0, invulnerable: 0 });
+  g.world.props = [];
+  g.world.hazards = [
+    {
+      id: "fixture-zone",
+      group: "fixture-salvo",
+      ownerId: e.id,
+      pattern: "mine",
+      x: 0,
+      z: 0,
+      width: 3,
+      depth: 3,
+      elapsed: 0,
+      delay: 0,
+      duration: 1,
+      height: 3,
+      damage: 12,
+      force: 0,
+      hit: false,
+    },
+  ];
+  const lab = g as unknown as { updateHazards: (dt: number) => void };
+  lab.updateHazards(1 / 60);
+  expect(p.damage).toBe(15);
+  p.invulnerable = 0;
+  lab.updateHazards(1 / 60);
+  expect(p.damage).toBe(15);
+  g.restart();
+  expect(g.world.hazards).toEqual([]);
+});
