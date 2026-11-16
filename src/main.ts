@@ -6,6 +6,7 @@ import { createCandidates } from './game/loadouts';
 import { EMPTY_INPUT } from './game/types';
 import type { GameMode, InputFrame, Loadout } from './game/types';
 import { GameScene } from './render/scene';
+import { RunPersistence } from './game/roguelite/checkpoint';
 import { RogueliteUI } from './ui/roguelite';
 import { GameUI } from './ui/hud';
 
@@ -23,6 +24,7 @@ async function main() {
   const input = new GameInput(canvasHost);
   const audio = new GameAudio();
   const engine = new GameEngine(seed);
+  const saves = new RunPersistence(engine, () => localStorage);
   let generation = 0;
   let candidates = createCandidates(seed);
   let accumulated = 0;
@@ -33,6 +35,7 @@ async function main() {
   let frameId = 0;
   let disposed = false;
   let ui: GameUI;
+  let rogueUI: RogueliteUI;
   let pending: InputFrame = { ...EMPTY_INPUT };
   let lastDiagnosticsTime = -Infinity;
   const diagnostics = params.get('diagnostics') === '1' ? document.createElement('pre') : null;
@@ -54,10 +57,12 @@ async function main() {
   }
 
   function newRun() {
+    saves.abandon();
     input.releaseAll();
     pending = { ...EMPTY_INPUT };
     generation++;
     candidates = createCandidates((seed + generation * 104729) >>> 0);
+    engine.world.seed = (seed + generation * 104729) >>> 0;
     engine.start(candidates[0]);
     engine.world.phase = 'ready';
     ui.showCandidates(candidates);
@@ -71,6 +76,8 @@ async function main() {
 
   ui = new GameUI(uiHost, {
     start,
+    isRunMapOpen: () => rogueUI?.blocksCombatInput() ?? false,
+    openRunMap: () => { if (!engine.run) return false; rogueUI.showRoute(); return true; },
     preview: (loadout) => { if (engine.world.phase === 'ready') engine.world.loadout = loadout; },
     reroll: () => {
       generation++;
@@ -95,7 +102,11 @@ async function main() {
     setGraphics: (settings) => scene.setGraphics(settings),
   }, candidates);
 
-  const rogueUI = new RogueliteUI(engine, resetInputAndFocus);
+  rogueUI = new RogueliteUI(engine, resetInputAndFocus, saves, newRun);
+  const saveHost=uiHost.querySelector<HTMLElement>('[data-run-save]')!;
+  saveHost.innerHTML='<p data-save-info role="status"></p><button type="button" data-save-continue>CONTINUE RUN / 続きから</button><button type="button" data-save-discard>DISCARD SAVE / 保存を破棄</button>';
+  saveHost.querySelector('[data-save-continue]')!.addEventListener('click',()=>{resetInputAndFocus();saves.resume();});
+  saveHost.querySelector('[data-save-discard]')!.addEventListener('click',()=>saves.discard());
 
   const unlock = () => audio.unlock();
   window.addEventListener('pointerdown', unlock, { once: true });
@@ -131,8 +142,8 @@ async function main() {
       fpsFrames = 0;
     }
     const sampled = input.sample();
-    if (engine.run && engine.run.phase !== 'combat') { input.releaseAll(); pending = { ...EMPTY_INPUT }; }
-    pending = engine.run && engine.run.phase !== 'combat' ? { ...EMPTY_INPUT } : mergeInputFrames(pending, sampled);
+    if (rogueUI.blocksCombatInput() || engine.run && engine.run.phase !== 'combat') { input.releaseAll(); pending = { ...EMPTY_INPUT }; }
+    pending = rogueUI.blocksCombatInput() || engine.run && engine.run.phase !== 'combat' ? { ...EMPTY_INPUT } : mergeInputFrames(pending, sampled);
     accumulated += dt;
     let steps = 0;
     while (accumulated >= 1 / 60 && steps++ < 6) {
@@ -147,6 +158,8 @@ async function main() {
       accumulated -= 1 / 60;
     }
     rogueUI.update();
+    saveHost.querySelector<HTMLElement>('[data-save-info]')!.textContent=saves.message || (saves.result.kind==='active'?'Saved run available. Reloading combat restarts from encounter-start resources.':saves.result.message);
+    (saveHost.querySelector('[data-save-continue]') as HTMLButtonElement).disabled=saves.result.kind!=='active';
     scene.update(engine.world, dt);
     if (diagnostics && now - lastDiagnosticsTime >= 1000) {
       // Read the app's own framebuffer immediately after rendering, before presentation.
@@ -171,6 +184,8 @@ async function main() {
         scene,
         candidates,
         start,
+    isRunMapOpen: () => rogueUI?.blocksCombatInput() ?? false,
+    openRunMap: () => { if (!engine.run) return false; rogueUI.showRoute(); return true; },
         snapshot: () => JSON.parse(JSON.stringify(engine.world)),
       },
     });

@@ -8,6 +8,8 @@ import './styles.css';
 
 export interface GameUICallbacks {
   start: (loadout: Loadout, mode: GameMode) => void;
+  isRunMapOpen?: () => boolean;
+  openRunMap?: () => boolean;
   preview?: (loadout: Loadout) => void;
   reroll: () => Loadout[];
   pause: () => void;
@@ -129,7 +131,7 @@ export class GameUI {
           <div class="chassis-grid" role="group" aria-label="アンドロイドを選択" data-hud="candidates"></div>
           <p class="selected-description" data-hud="selectedDescription"></p>
           <div class="launch-row"><div class="mode-switch" role="group" aria-label="ゲームモード"><button type="button" data-mode="campaign" class="selected" aria-pressed="true">CAMPAIGN<span>${STAGES.length}区画・${STAGES.reduce((n, s) => n + s.waves.length, 0)}の戦闘</span></button><button type="button" data-mode="roguelite" aria-pressed="false">ROGUELITE<span>3 Act・分岐ルート</span></button><button type="button" data-mode="training" aria-pressed="false">TRAINING<span>操作を試す</span></button></div><button type="button" class="launch-button" data-action="start"><span>BOOT & BREAK OUT<small>起動して、反乱を始める</small></span><span class="launch-arrow">↗</span></button></div>
-          <div class="boot-footnote"><span>SMASH-INSPIRED COMBAT</span><i>·</i><span>RANDOMIZED ABILITIES</span><i>·</i><button type="button" data-action="help">操作ガイド ↗</button></div>
+          <div data-run-save></div><div class="boot-footnote"><span>SMASH-INSPIRED COMBAT</span><i>·</i><span>RANDOMIZED ABILITIES</span><i>·</i><button type="button" data-action="help">操作ガイド ↗</button></div>
         </div>
         <div class="boot-side-label" aria-hidden="true"><span>REJECT THE PROTOCOL</span><i></i><b>NO ORDERS.<br>ONLY CHOICES.</b></div>
       </section>
@@ -361,6 +363,7 @@ export class GameUI {
   }
 
   private showMap(): void {
+    if (this.callbacks.openRunMap?.()) { this.closeModal(); return; }
     if (this.modalKind === 'map') return;
     this.mapResume = this.world?.phase === 'playing' || this.world?.phase === 'sector-clear';
     if (this.mapResume) this.callbacks.pause();
@@ -455,7 +458,7 @@ export class GameUI {
     this.host.classList.toggle('is-training', world.mode === 'training');
     if (world.phase !== 'ready' && this.lastPhase === 'ready') this.showingCandidates = false;
     this.boot.hidden = !isReady;
-    if (world.phase === 'paused' && this.lastPhase !== 'paused' && this.modalKind !== 'help' && this.modalKind !== 'map' && this.modalKind !== 'graphics') this.showPause();
+    if (world.phase === 'paused' && !this.callbacks.isRunMapOpen?.() && this.lastPhase !== 'paused' && this.modalKind !== 'help' && this.modalKind !== 'map' && this.modalKind !== 'graphics') this.showPause();
     if (world.phase !== 'paused' && this.modalKind === 'pause') {
       this.closeModal();
       // Esc/START can resume directly through the engine; a toolbar button must not steal the next jump.

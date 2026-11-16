@@ -83,10 +83,12 @@ interface ProjectileMemory {
   force: number;
   growth: number;
   facing: 1 | -1;
+  owner?: Actor;
 }
 
 /** Pure simulation: rendering, audio and input devices are independent adapters. */
 export class GameEngine {
+  onRunChange: (() => void) | null = null;
   world: WorldState;
   run: RunState | null = null;
   private encounter: ActorKind[] = [];
@@ -149,7 +151,7 @@ export class GameEngine {
       this.run = createRun(seed, loadout);
       this.world.phase = 'sector-clear';
       this.world.enemies = []; this.world.props = [];
-      return;
+      this.touchRun(); return;
     }
     this.world.props.push(...objectiveProps(0, this.world.objective));
     player.invulnerable = 1.8;
@@ -157,9 +159,39 @@ export class GameEngine {
     this.effect('spawn', player.x, 0, player.z, 0.8, 2.2, loadout.color);
   }
 
+  private touchRun(): void {
+    if (!this.run) return;
+    if (this.run.phase !== 'combat') this.syncRunResources();
+    this.run.revision++; this.onRunChange?.();
+  }
+
+  exportCheckpoint(): { run: RunState; reward: { ids: UpgradeId[]; claimed: boolean } } | null {
+    if (!this.run || this.run.phase === 'finished' || this.world.phase === 'lost' || this.world.phase === 'won') return null;
+    return structuredClone({run:this.run,reward:{ids:this.world.upgradeChoices.map(c=>c.id),claimed:this.world.upgradeClaimed}});
+  }
+
+  restoreCheckpoint(checkpoint: {run: RunState; reward:{ids:UpgradeId[];claimed:boolean}}): void {
+    const r=structuredClone(checkpoint.run);
+    const notify=this.onRunChange; this.onRunChange=null;
+    this.world.seed=r.seed; this.start(r.originalLoadout,'roguelite'); this.onRunChange=notify;
+    this.run=r; this.startingLoadout=structuredClone(r.originalLoadout);
+    const w=this.world;
+    w.loadout=structuredClone(r.resources.loadout);w.upgrades=structuredClone(r.resources.upgrades);
+    w.player.damage=r.resources.damage;w.stocks=r.resources.stocks;w.score=r.resources.score;w.kills=r.resources.kills;
+    if(r.phase==='combat') {
+      const n=effectiveNode(r,r.map.find(n=>n.id===r.current)!);
+      this.beginEncounter(r.events.resolved[n.id]?.combat?{...n,kind:'elite'}:n);
+    } else {
+      w.phase='sector-clear';
+      w.upgradeChoices=checkpoint.reward.ids.map(id=>{const d=getUpgradeDefinition(id);const rank=upgradeRank(w.upgrades,id);return {...d,rank,nextRank:rank+1};});
+      w.upgradeClaimed=checkpoint.reward.claimed;
+    }
+    this.touchRun();
+  }
+
   selectNode(id: string): boolean {
     if (!this.run || !availableNodes(this.run).includes(id)) return false;
-    this.run.selected = id; return true;
+    this.run.selected = id; this.touchRun(); return true;
   }
 
   travelNode(): boolean {
@@ -171,7 +203,7 @@ export class GameEngine {
     r.current = node.id; r.visited.push(node.id); r.selected = null;
     if (['battle', 'elite', 'boss'].includes(node.kind)) this.beginEncounter(node);
     else { r.phase = 'node'; this.world.phase = 'sector-clear'; if (node.kind === 'shop') r.economy.shops[node.id] ??= createShop(r, node); }
-    return true;
+    this.touchRun(); return true;
   }
 
   private beginEncounter(node: MapNode): void {
@@ -179,15 +211,17 @@ export class GameEngine {
     r.phase = 'combat';
     this.modifiers = eliteModifiers(r, node);
     this.encounter = encounterRoster(r, node);
+    if (this.modifiers.includes('armor') && !this.encounter.some(k=>['sentinel','warden','boss','rider'].includes(k))) this.encounter.push('sentinel');
     if (this.modifiers.includes('commander')) this.encounter = ['captain', 'sentinel', 'rider', ...this.encounter.slice(0, 3)];
     if (this.modifiers.includes('swarm')) this.encounter.push(...Array.from({length: Math.ceil(this.encounter.length / 2)}, () => 'minion' as const));
     this.random = seededRandom(nodeSeed(r.seed, `combat:${node.id}`));
     this.memories.clear(); this.shots.clear(); this.actions.reset(); this.director.reset();
     this.upgradeBursts = []; this.comboAge = 0; this.sectorCleared = false;
+    w.combo = 0;
     w.sector = node.theme; w.wave = 1; w.waveTimer = 0; w.hitstop = 0; w.specialCooldown = 0;
     w.arenaMin = node.theme * SECTOR_SPAN - ARENA_HALF_WIDTH; w.arenaMax = node.theme * SECTOR_SPAN + ARENA_HALF_WIDTH; w.cameraX = node.theme * SECTOR_SPAN;
     w.player = this.makeActor('player', w.cameraX - 5, 0); w.player.damage = r.resources.damage; w.player.invulnerable = 1.8;
-    w.stocks = r.resources.stocks; w.loadout = structuredClone(r.resources.loadout); w.upgrades = structuredClone(r.resources.upgrades);
+    w.stocks = r.resources.stocks; w.score = r.resources.score; w.kills = r.resources.kills; w.loadout = structuredClone(r.resources.loadout); w.upgrades = structuredClone(r.resources.upgrades);
     w.enemies = []; w.projectiles = []; w.hazards = []; w.effects = []; w.pendingSpawns = [];
     w.objective = createObjective(node.theme, 'training'); w.objective.label = `ACT ${node.act} / ${node.kind.toUpperCase()} — 単発遭遇`;
     w.props = createArena(node.theme).map(prop => ({ ...prop, id: `${node.id}:${prop.id}` })); w.coordination = emptyCoordination();
@@ -207,11 +241,11 @@ export class GameEngine {
     const node = effectiveNode(r,r.map.find(n => n.id === r.current)!);
     r.completed.push(node.id); this.syncRunResources();
     if (node.kind === 'boss') {
-      if (r.act === 3) { r.phase = 'finished'; this.world.phase = 'won'; return true; }
+      if (r.act === 3) { r.phase = 'finished'; this.world.phase = 'won'; this.touchRun(); return true; }
       r.act++;
     }
     r.phase = 'map'; this.world.phase = 'sector-clear';
-    return true;
+    this.touchRun(); return true;
   }
 
   chooseEvent(choice: string): boolean {
@@ -230,12 +264,12 @@ export class GameEngine {
     w.player.damage=r.resources.damage; w.stocks=r.resources.stocks;
     w.loadout=structuredClone(r.resources.loadout);w.upgrades=structuredClone(r.resources.upgrades);
     if (preview.combat) this.beginEncounter({...r.map.find(n=>n.id===r.current)!,kind:'elite'});
-    return true;
+    this.touchRun(); return true;
   }
 
   skipUpgrade(): boolean {
     if (!this.run || this.run.phase !== 'reward' || this.world.upgradeClaimed) return false;
-    this.world.upgradeClaimed = true; return true;
+    this.world.upgradeClaimed = true; this.touchRun(); return true;
   }
 
   private applyUpgrade(id: UpgradeId): boolean {
@@ -257,9 +291,27 @@ export class GameEngine {
     return true;
   }
 
+  purchaseReason(id: string): string | null {
+    const r=this.run,w=this.world;
+    if(!r||r.phase!=='node'||!r.current)return 'Not in a shop';
+    const item=r.economy.shops[r.current]?.find(i=>i.id===id);
+    if(!item)return 'Unknown stock';if(item.sold)return 'SOLD OUT';
+    if(r.economy.scrap<item.price)return 'Insufficient SCRAP';
+    if(item.kind==='repair'&&w.player.damage<=0)return 'No damage to repair';
+    if(item.kind==='stock'&&w.stocks>=4)return 'Stock cap 4';
+    if(item.relic&&(r.economy.relics.includes(item.relic)||item.relic==='reserve'&&w.stocks>=4))return 'Relic owned / stock cap';
+    if(item.upgrade){const d=getUpgradeDefinition(item.upgrade);if(d.weapon!=='all'&&d.weapon!==w.loadout.weapon||upgradeRank(w.upgrades,item.upgrade)>=d.maxRank)return 'Incompatible / upgrade capped';}
+    return null;
+  }
+
+  restUpgrade() {
+    const r=this.run;if(!r||!r.current)return null;
+    return createUpgradeChoices(nodeSeed(r.seed,'rest'),nodeSeed(0,r.current),this.world.loadout,this.world.upgrades)[0]??null;
+  }
+
   buyStock(id: string): boolean {
     const r = this.run, w = this.world;
-    if (!r || r.phase !== 'node' || !r.current) return false;
+    if (!r || r.phase !== 'node' || !r.current || this.purchaseReason(id)) return false;
     const stock = r.economy.shops[r.current]?.find(item => item.id === id);
     if (!stock || stock.sold || r.economy.scrap < stock.price) return false;
     let applied = false;
@@ -268,7 +320,7 @@ export class GameEngine {
     if (stock.kind === 'stock' && w.stocks < 4) { w.stocks++; applied = true; }
     if (stock.kind === 'relic' && stock.relic) applied = this.grantRelic(stock.relic);
     if (!applied) return false;
-    stock.sold = true; r.economy.scrap -= stock.price; this.syncRunResources(); return true;
+    stock.sold = true; r.economy.scrap -= stock.price; this.syncRunResources(); this.touchRun(); return true;
   }
 
   claimNodeBenefit(choice: 'treasure' | 'repair' | 'upgrade'): boolean {
@@ -282,10 +334,10 @@ export class GameEngine {
       r.economy.scrap += 20 + (r.economy.relics.includes('magnet') ? 20 : 0);
     } else if (node.kind === 'rest' && choice === 'repair' && w.player.damage > 0) w.player.damage = Math.max(0, w.player.damage - 50);
     else if (node.kind === 'rest' && choice === 'upgrade') {
-      const upgrade = createUpgradeChoices(nodeSeed(r.seed,'rest'), nodeSeed(0,node.id), w.loadout,w.upgrades)[0];
+      const upgrade = this.restUpgrade();
       if (upgrade) this.applyUpgrade(upgrade.id); else r.economy.scrap += 20;
     } else return false;
-    r.economy.nodeClaims.push(node.id); this.syncRunResources(); return true;
+    r.economy.nodeClaims.push(node.id); this.syncRunResources(); this.touchRun(); return true;
   }
 
   pause(): void {
@@ -320,7 +372,7 @@ export class GameEngine {
     if (!this.applyUpgrade(id)) return false;
     w.upgradeClaimed = true;
     w.message = `BUILD UPDATED // ${getUpgradeDefinition(id).name}`; w.messageTime = 3;
-    return true;
+    this.touchRun(); return true;
   }
 
   nextSector(): void {
@@ -1115,7 +1167,7 @@ export class GameEngine {
         target: { x: target.x, z: target.z }, radius: 0.3, life: 2, color: 0xffcf65,
       };
       w.projectiles.push(shot);
-      this.shots.set(shot.id, { kind: 'enemy', damage: strike.damage, force: strike.force, growth: strike.growth, facing: actor.facing });
+      this.shots.set(shot.id, { owner: structuredClone(actor), kind: 'enemy', damage: strike.damage, force: strike.force, growth: strike.growth, facing: actor.facing });
       return;
     }
     const spread = actor.kind === 'player' && strike.move.id === 'special.pulse.split';
@@ -1151,9 +1203,9 @@ export class GameEngine {
         if (shot.y <= 0.08) {
           const data = this.shots.get(shot.id), p = w.player;
           this.effect('shockwave', shot.x, 0.06, shot.z, 0.5, 2.1, shot.color);
-          // An already-launched shell survives its owner's defeat. Neutral
-          // attribution prevents a missing owner from cancelling the impact.
-          const attacker = source ?? { ...p, id: shot.ownerId, kind: 'artillery' as const, x: shot.x, z: shot.z };
+          // A launched shell retains its owner snapshot after defeat/removal.
+          // Damage modifiers still pass through the one hit boundary.
+          const attacker = source ?? data?.owner ?? { ...p, id: shot.ownerId, kind: 'artillery' as const, x: shot.x, z: shot.z };
           if (data && Math.hypot(p.x - shot.x, p.z - shot.z) < 2.1 && p.y >= 0 && p.y < 1.4) this.hit(p, attacker, data.damage, data.force, data.growth, 0.8, p.x > shot.x ? 1 : -1, 'enemy');
           for (const prop of w.props) if (prop.hp > 0 && Math.hypot(prop.x - shot.x, prop.z - shot.z) < 2.1) this.damageProp(prop, 12, attacker);
           shot.life = 0;
@@ -1208,9 +1260,9 @@ export class GameEngine {
     // One damage boundary for melee, shots and floor hazards. Never pre-scale emitters.
     if (this.run) {
       if (target.kind === 'player') {
-        const enemySource = w.enemies.some(e => e.id === source.id);
+        const enemySource = !w.props.some(p => p.id === source.id) && source.kind !== 'player';
         damage *= relicEffect(this.run.economy.relics, 'incoming') * (enemySource && (this.modifiers.includes('damage') || this.modifiers.includes('berserk') && source.damage >= 60) ? 1.25 : 1);
-        force *= relicEffect(this.run.economy.relics, 'force');
+        // Ballast is applied to the complete impulse below, including growth.
       } else if (source.kind === 'player') damage *= relicEffect(this.run.economy.relics, 'damage');
     }
     if (m.grabTarget) this.releaseGrab(target);
@@ -1263,7 +1315,7 @@ export class GameEngine {
       }
     }
     const weight = target.kind === 'player' ? w.loadout.weight : target.kind === 'boss' ? 3.6 : target.kind === 'warden' ? 2.6 : target.mount > 0 ? 1.4 : target.kind === 'minion' ? 0.6 : target.kind === 'bruiser' ? 1.45 : target.kind === 'drone' ? 0.78 : 1;
-    const impulse = (force + target.damage * growth) / weight * (armored ? 0.16 : 1) * launchScale;
+    const impulse = (target.kind === 'player' ? relicEffect(this.run?.economy.relics ?? [], 'force') : 1) * (force + target.damage * growth) / weight * (armored ? 0.16 : 1) * launchScale;
     target.vx = facing * Math.cos(angle) * impulse;
     target.vy = Math.sin(angle) * impulse;
     if (target.y <= 0.05 && target.vy < 0) target.vy = Math.abs(target.vy) * 0.6 + 4;
@@ -1448,6 +1500,7 @@ export class GameEngine {
       w.messageTime = 2;
       if (w.stocks <= 0 && w.mode !== 'training') {
         w.phase = 'lost';
+        if (this.run) { this.run.phase = 'finished'; this.touchRun(); }
         w.events.push({ type: 'lose' });
       } else if (w.mode === 'training') w.stocks = 3;
     } else {
@@ -1616,13 +1669,18 @@ export class GameEngine {
       if (!r.economy.rewards.includes(node.id)) {
         r.economy.rewards.push(node.id);
         r.economy.scrap += Math.round((node.kind === 'boss' ? 90 : node.kind === 'elite' || r.events.resolved[node.id]?.combat ? 60 : 30) * relicEffect(r.economy.relics, 'reward'));
+        if (node.kind === 'elite' || node.kind === 'boss' || r.events.resolved[node.id]?.combat) {
+          const pool=RELICS.filter(v=>!r.economy.relics.includes(v.id)&&(v.id!=='reserve'||w.stocks<4));
+          const relic=pool[nodeSeed(r.seed,`elite-relic:${node.id}`)%pool.length];
+          if(relic)this.grantRelic(relic.id);else r.economy.scrap+=30;
+        }
         if (r.economy.relics.includes('solder')) w.player.damage = Math.max(0,w.player.damage - 15);
       }
       w.upgradeChoices = createUpgradeChoices(nodeSeed(r.seed,'reward'), nodeSeed(0,node.id),w.loadout,w.upgrades);
       w.upgradeClaimed = w.upgradeChoices.length === 0;
       this.syncRunResources();
       w.phase = 'sector-clear'; w.projectiles = []; w.hazards = [];
-      return;
+      this.touchRun(); return;
     }
     if (w.mode === 'training') {
       w.wave++;
