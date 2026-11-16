@@ -8,10 +8,12 @@ import {
   Mesh3D,
   SphereGeometry,
   TorusGeometry,
-  Matrix4, Vector3,
+  Vector3,
 } from '@pixi/3d';
 import type { Actor, ActorKind, WeaponId } from '../game/types';
-import { attackMotion } from './motion';
+import { RigAnimator, type RigFrame } from './rig/animator';
+import { quatMul, quatX, quatY } from './rig/math';
+import type { Xform } from './rig/skeleton';
 
 export interface RobotAssets {
   cube: CubeGeometry;
@@ -35,12 +37,27 @@ export class RobotView {
   readonly marker: Mesh3D;
   readonly warning: Mesh3D;
   readonly shield: Mesh3D;
+  /** Rigid bones, all direct children of `root` and placed in rig space by the solved skeleton. */
+  private readonly hips = new Container3D();
+  /** The chest; kind-specific torso details attach here. */
   private readonly body = new Container3D();
   private readonly head = new Container3D();
+  private readonly upperArmL = new Container3D();
+  private readonly upperArmR = new Container3D();
+  private readonly foreL = new Container3D();
+  private readonly foreR = new Container3D();
+  private readonly thighL = new Container3D();
+  private readonly thighR = new Container3D();
+  private readonly shinL = new Container3D();
+  private readonly shinR = new Container3D();
+  private readonly footL = new Container3D();
+  private readonly footR = new Container3D();
+  /** Forearm and shin mounts keep whole-limb coordinates (origin at the shoulder / hip joint). */
   private readonly leftArm = new Container3D();
   private readonly rightArm = new Container3D();
   private readonly leftLeg = new Container3D();
   private readonly rightLeg = new Container3D();
+  private readonly animator: RigAnimator | null;
   private readonly blade = new Container3D();
   private readonly hammer = new Container3D();
   private readonly fist = new Container3D();
@@ -63,6 +80,7 @@ export class RobotView {
     this.kind = kind;
     this.weaponView = kind === 'player' ? new WeaponView(assets) : null;
     this.isDrone = kind === 'drone';
+    this.animator = this.isDrone ? null : new RigAnimator(kind);
     this.root.label = `robot-${kind}`;
     const armor = assets.armor[kind];
     const glow = assets.glow[kind];
@@ -142,16 +160,23 @@ export class RobotView {
     const heavy = boss || this.kind === 'bruiser' || this.kind === 'sentinel';
     const width = boss ? 1.12 : heavy ? 0.86 : 0.64;
     const a = this.assets;
-    this.root.addChild(this.body, this.leftLeg, this.rightLeg);
-    this.body.position.y = 0.95;
-    this.box(this.body, a.joint, 0, -0.1, 0, width * 0.7, 0.4, 0.38);
+    const spec = this.animator!.spec;
+    this.root.addChild(
+      this.hips, this.body, this.head, this.upperArmL, this.upperArmR, this.foreL, this.foreR,
+      this.thighL, this.thighR, this.shinL, this.shinR, this.footL, this.footR,
+    );
+    this.foreL.addChild(this.leftArm);
+    this.foreR.addChild(this.rightArm);
+    this.leftArm.y = this.rightArm.y = spec.upperArm;
+    this.shinL.addChild(this.leftLeg);
+    this.shinR.addChild(this.rightLeg);
+    this.leftLeg.y = this.rightLeg.y = spec.thigh;
+    this.box(this.hips, a.joint, 0, -0.1, 0, width * 0.7, 0.4, 0.38);
+    this.box(this.hips, a.trim, 0, 0.02, 0.25, width * 0.9, 0.11, 0.1, false);
     this.box(this.body, armor, 0, 0.32, 0, width, 0.68, heavy ? 0.6 : 0.44);
-    this.box(this.body, a.trim, 0, 0.02, 0.25, width * 0.9, 0.11, 0.1, false);
     const chest = this.box(this.body, glow, 0, 0.37, heavy ? 0.325 : 0.235, width * 0.28, 0.22, 0.045, false);
     chest.rotation.z = Math.PI / 4;
     this.box(this.body, a.joint, 0, 0.7, 0, 0.18, 0.17, 0.2, false);
-    this.body.addChild(this.head);
-    this.head.position.set(0, 0.92, 0);
     this.box(this.head, armor, 0, 0, 0, boss ? 0.6 : 0.44, 0.38, 0.4);
     this.box(this.head, a.joint, 0, 0.015, 0.21, boss ? 0.53 : 0.37, 0.15, 0.04, false);
     this.box(this.head, glow, 0, 0.02, 0.238, boss ? 0.45 : 0.31, 0.065, 0.025, false);
@@ -163,26 +188,22 @@ export class RobotView {
       this.box(this.body, glow, 0, 0.2, -0.41, 0.09, 0.27, 0.035, false);
     }
 
-    const armX = width / 2 + 0.16;
-    this.body.addChild(this.leftArm, this.rightArm);
-    this.leftArm.position.set(-armX, 0.51, 0);
-    this.rightArm.position.set(armX, 0.51, 0);
-    for (const arm of [this.leftArm, this.rightArm]) {
-      this.ball(arm, a.joint, 0, 0, 0, 0.18);
-      this.box(arm, armor, 0, -0.12, 0, heavy ? 0.4 : 0.25, 0.36, heavy ? 0.43 : 0.29);
-      this.box(arm, a.joint, 0, -0.37, 0, 0.16, 0.18, 0.18, false);
-      this.box(arm, armor, 0, -0.56, 0.04, heavy ? 0.36 : 0.22, 0.3, heavy ? 0.38 : 0.25);
-      this.box(arm, glow, 0, -0.55, 0.19, 0.07, 0.18, 0.035, false);
-      this.box(arm, a.joint, 0, -0.76, 0.04, heavy ? 0.3 : 0.2, 0.18, 0.25);
+    for (const [upper, fore] of [[this.upperArmL, this.leftArm], [this.upperArmR, this.rightArm]] as const) {
+      this.ball(upper, a.joint, 0, 0, 0, 0.18);
+      this.box(upper, armor, 0, -0.12, 0, heavy ? 0.4 : 0.25, 0.36, heavy ? 0.43 : 0.29);
+      this.box(fore, a.joint, 0, -0.37, 0, 0.16, 0.18, 0.18, false);
+      this.box(fore, armor, 0, -0.56, 0.04, heavy ? 0.36 : 0.22, 0.3, heavy ? 0.38 : 0.25);
+      this.box(fore, glow, 0, -0.55, 0.19, 0.07, 0.18, 0.035, false);
+      this.box(fore, a.joint, 0, -0.76, 0.04, heavy ? 0.3 : 0.2, 0.18, 0.25);
     }
-    for (const [i, leg] of [this.leftLeg, this.rightLeg].entries()) {
-      leg.position.set((i === 0 ? -1 : 1) * width * 0.3, 0.88, 0);
-      this.ball(leg, a.joint, 0, -0.05, 0, 0.15);
-      this.box(leg, armor, 0, -0.24, 0, heavy ? 0.31 : 0.23, 0.38, 0.3);
-      this.box(leg, a.joint, 0, -0.46, 0.025, 0.18, 0.16, 0.2, false);
-      this.box(leg, armor, 0, -0.63, 0.025, heavy ? 0.32 : 0.24, 0.28, 0.31);
-      this.box(leg, glow, 0, -0.58, 0.19, 0.07, 0.14, 0.025, false);
-      this.box(leg, a.trim, 0, -0.8, 0.13, heavy ? 0.34 : 0.28, 0.16, 0.48);
+    for (const [thigh, shin, foot] of [[this.thighL, this.leftLeg, this.footL], [this.thighR, this.rightLeg, this.footR]] as const) {
+      this.ball(thigh, a.joint, 0, -0.05, 0, 0.15);
+      this.box(thigh, armor, 0, -0.24, 0, heavy ? 0.31 : 0.23, 0.38, 0.3);
+      this.box(shin, a.joint, 0, -0.46, 0.025, 0.18, 0.16, 0.2, false);
+      this.box(shin, armor, 0, -0.63, 0.025, heavy ? 0.32 : 0.24, 0.28, 0.31);
+      this.box(shin, glow, 0, -0.58, 0.19, 0.07, 0.14, 0.025, false);
+      // The foot is its own bone at the ankle, so the sole stays flat while the shin leans.
+      this.box(foot, a.trim, 0, 0.08 - spec.ankle, 0.13, heavy ? 0.34 : 0.28, 0.16, 0.48);
     }
 
     if (boss) {
@@ -206,8 +227,8 @@ export class RobotView {
     } else if (this.kind === 'sapper') {
       this.box(this.body, a.trim, 0, 0.28, -0.4, 0.8, 0.9, 0.4);
       for (const x of [-0.28, 0, 0.28]) {
-        this.box(this.body, armor, x, -0.08, 0.3, 0.22, 0.22, 0.22);
-        this.box(this.body, glow, x, -0.08, 0.43, 0.11, 0.06, 0.03, false);
+        this.box(this.hips, armor, x, -0.08, 0.3, 0.22, 0.22, 0.22);
+        this.box(this.hips, glow, x, -0.08, 0.43, 0.11, 0.06, 0.03, false);
       }
       this.box(this.leftArm, glow, 0, -0.7, 0.17, 0.38, 0.1, 0.38, false);
     } else if (this.kind === 'gunner') {
@@ -358,8 +379,6 @@ export class RobotView {
     const scale = actor.scale;
     this.root.position.set(actor.x, actor.y, actor.z);
     this.root.scale.set(scale);
-    this.root.rotation.y = actor.facing * Math.PI / 2;
-    this.root.rotation.z = 0;
     this.root.visible = actor.alive;
     this.boosters.visible = actor.state === 'recover' || actor.bossPhase === 'overdrive';
     this.marker.visible = actor.kind === 'player' || actor.bossPhase === 'overdrive';
@@ -398,7 +417,8 @@ export class RobotView {
       this.root.visible = Math.floor(time * 16) % 3 !== 0;
     }
 
-    if (this.isDrone) {
+    if (!this.animator) {
+      this.root.rotation.y = actor.facing * Math.PI / 2;
       this.body.y = 0.8 + Math.sin(time * 4.5) * 0.08;
       this.body.rotation.z = Math.sin(time * 2.7) * 0.05 - actor.vx * 0.02;
       this.body.rotation.x = actor.state === 'attack' ? actor.telegraph > 0 ? -0.3 : 0.45 : 0;
@@ -406,104 +426,63 @@ export class RobotView {
       return;
     }
 
-    const running = actor.state === 'run';
     const mounted = this.kind === 'rider' && actor.mount > 0;
     this.mount.visible = mounted;
-    const stride = Math.sin(time * (this.kind === 'boss' ? 8 : 16));
-    const breathe = Math.sin(time * 2.3) * 0.02;
-    this.body.position.y = 0.95 + (mounted ? 0.5 : 0) + breathe + (running ? Math.abs(stride) * 0.055 : 0);
-    this.leftLeg.y = this.rightLeg.y = 0.88 + (mounted ? 0.5 : 0);
     this.mountLegs.forEach((leg, index) => { leg.rotation.x = Math.sin(time * 18 + index * Math.PI) * Math.min(0.6, Math.abs(actor.vx) * 0.08); });
-    this.rightArm.scale.set(1);
-    this.body.rotation.set(0, 0, 0);
-    this.head.rotation.set(0, 0, 0);
-    this.leftArm.rotation.set(running ? stride * 0.65 : -0.07, 0, 0.08);
-    this.rightArm.rotation.set(running ? -stride * 0.65 : -0.15, 0, -0.08);
-    this.leftLeg.rotation.set(running ? -stride * 0.7 : 0, 0, 0);
-    this.rightLeg.rotation.set(running ? stride * 0.7 : 0, 0, 0);
-    if (this.kind === 'player') {
-      if (weapon === 'cannon' || weapon === 'lance' || weapon === 'scythe') {
-        this.rightArm.rotation.x = weapon === 'scythe' ? -0.8 : -1.45;
-        this.leftArm.rotation.set(-1.1, 0.5, 0.08);
-      }
-      if (weapon === 'razor') { this.body.position.y -= 0.08; this.leftArm.rotation.x = -1.1; this.rightArm.rotation.x = -0.9; }
-    }
 
-    switch (actor.state) {
-      case 'jump':
-      case 'fall':
-      case 'airdodge':
-        this.leftLeg.rotation.x = -0.65;
-        this.rightLeg.rotation.x = 0.45;
-        this.leftArm.rotation.x = -0.6;
-        this.rightArm.rotation.x = -0.85;
-        break;
-      case 'charge':
-        this.body.rotation.x = 0.16;
-        this.body.position.y -= 0.14;
-        this.rightArm.rotation.set(-2.5, -0.4, -0.2);
-        this.leftArm.rotation.x = -0.8;
-        this.leftLeg.rotation.x = -0.2;
-        this.rightLeg.rotation.x = 0.3;
-        break;
-      case 'attack': {
-        if (!actor.attack) break;
-        const style = this.kind === 'player' ? weapon : this.kind === 'bruiser' || this.kind === 'boss' || this.kind === 'warden' ? 'pile' : this.kind === 'scout' ? 'arc' : 'razor';
-        const pose = attackMotion(actor.attack, style);
-        const blend = (rest: number, target: number) => rest + (target - rest) * pose.weight;
-        this.body.rotation.set(pose.bodyX * pose.weight, pose.bodyY * pose.weight, 0);
-        this.body.position.y += pose.crouch * pose.weight;
-        this.rightArm.rotation.set(blend(-0.15, pose.rightArmX), pose.rightArmY * pose.weight, blend(-0.08, pose.rightArmZ));
-        this.leftArm.rotation.set(blend(-0.07, pose.leftArmX), pose.leftArmY * pose.weight, blend(0.08, pose.leftArmZ));
-        this.leftLeg.rotation.x = pose.leftLegX * pose.weight;
-        this.rightLeg.rotation.x = pose.rightLegX * pose.weight;
-        break;
-      }
-      case 'grab':
-      case 'shield':
-        this.leftArm.rotation.x = -1.35;
-        this.rightArm.rotation.x = -1.4;
-        this.body.position.y -= 0.1;
-        break;
-      case 'dodge':
-        this.body.rotation.x = 0.6;
-        this.body.position.y -= 0.12;
-        this.leftLeg.rotation.x = -0.75;
-        this.rightLeg.rotation.x = 0.5;
-        this.leftArm.rotation.x = -0.9;
-        break;
-      case 'wavedash':
-        this.body.position.y -= 0.22;
-        this.body.rotation.x = 0.38;
-        this.leftLeg.rotation.x = -0.6;
-        this.rightLeg.rotation.x = 0.35;
-        this.rightArm.rotation.x = 0.6;
-        break;
-      case 'hurt':
-      case 'grabbed':
-        this.body.rotation.x = -0.38;
-        this.leftArm.rotation.x = -1.2;
-        this.rightArm.rotation.x = -1;
-        this.leftLeg.rotation.x = 0.3;
-        this.rightLeg.rotation.x = -0.2;
-        this.root.rotation.z = -actor.facing * Math.min(0.9, Math.abs(actor.vx) * 0.035);
-        break;
-    }
+    // The skeleton follows the same world segment the simulation checked this tick.
+    const capsule = actor.state === 'attack' && actor.attack?.move
+      ? actor.attack.collision?.capsule ?? sampleWeapon(actor, actor.attack.move, actor.attack.elapsed * 60)
+      : null;
+    this.apply(this.animator.update(actor, time, weapon, capsule));
+  }
 
-    if (this.kind === 'gunner' && actor.state === 'idle') this.rightArm.rotation.x = -1.1;
-    if (this.kind === 'sentinel' && actor.guard > 0 && (actor.state === 'idle' || actor.state === 'run')) {
-      this.leftArm.rotation.x = -0.35;
-      this.body.rotation.y = 0.25;
-    }
-    if (authoritativeWeapon && actor.attack?.move) {
-      const grip = (actor.attack.collision?.capsule ?? sampleWeapon(actor, actor.attack.move, actor.attack.elapsed * 60)).a;
-      const inverse = new Matrix4().getInverse(worldMatrix(this.body));
-      const local = new Vector3(grip.x, grip.y, grip.z).applyMatrix4(inverse);
-      const dx = local.x - this.rightArm.x, dy = local.y - this.rightArm.y, dz = local.z - this.rightArm.z;
-      this.rightArm.rotation.set(Math.atan2(-dz, -dy), 0, -Math.atan2(-dx, Math.hypot(dy, dz)));
-      this.rightArm.scale.y = Math.hypot(dx, dy, dz) / .76;
-    }
-    if (mounted) { this.leftLeg.rotation.x = -0.85; this.rightLeg.rotation.x = -0.85; }
+  private apply(frame: RigFrame): void {
+    const { rig } = frame;
+    // Assign whole quaternions: that is what makes them, not the Euler angles, the rotation in use.
+    this.root.quaternion = quatMul(quatY(frame.yaw), quatX(frame.tumble));
+    const place = (node: Container3D, bone: Xform) => {
+      node.position.set(bone.p.x, bone.p.y, bone.p.z);
+      node.quaternion = bone.q;
+    };
+    place(this.hips, rig.hips);
+    place(this.body, rig.chest);
+    place(this.head, rig.head);
+    place(this.upperArmL, rig.upperArmL);
+    place(this.foreL, rig.forearmL);
+    place(this.upperArmR, rig.upperArmR);
+    place(this.foreR, rig.forearmR);
+    place(this.thighL, rig.thighL);
+    place(this.shinL, rig.shinL);
+    place(this.footL, rig.footL);
+    place(this.thighR, rig.thighR);
+    place(this.shinR, rig.shinR);
+    place(this.footR, rig.footR);
+  }
+
+  /**
+   * World positions read back from Pixi's real scene transforms (not from the solver), plus the
+   * solved frame they should agree with. Lets tests prove bones stay rigid and hands stay on the weapon.
+   */
+  rigDiagnostics() {
+    if (!this.animator?.last) return null;
+    const at = (node: Container3D, x = 0, y = 0, z = 0) => {
+      const p = new Vector3(x, y, z).applyMatrix4(worldMatrix(node));
+      return { x: p.x, y: p.y, z: p.z };
+    };
+    const { spec } = this.animator;
+    return {
+      frame: this.animator.last,
+      spec,
+      joints: {
+        shoulderL: at(this.upperArmL), elbowL: at(this.foreL), handL: at(this.foreL, 0, -spec.forearm, 0),
+        shoulderR: at(this.upperArmR), elbowR: at(this.foreR), handR: at(this.foreR, 0, -spec.forearm, 0),
+        hipL: at(this.thighL), kneeL: at(this.shinL), ankleL: at(this.footL), soleL: at(this.footL, 0, -spec.ankle, 0),
+        heelL: at(this.footL, 0, -spec.ankle, -spec.heel), toeL: at(this.footL, 0, -spec.ankle, spec.toe),
+        hipR: at(this.thighR), kneeR: at(this.shinR), ankleR: at(this.footR), soleR: at(this.footR, 0, -spec.ankle, 0),
+        heelR: at(this.footR, 0, -spec.ankle, -spec.heel), toeR: at(this.footR, 0, -spec.ankle, spec.toe),
+      },
+    };
   }
 
   destroy(): void {

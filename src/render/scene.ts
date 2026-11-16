@@ -727,6 +727,11 @@ export class GameScene {
     return this.actors.get(actorId)?.robot.weaponView?.tipWorld() ?? null;
   }
 
+  /** Skeleton joints read back from the scene graph, with the solved frame they came from. */
+  rigDiagnostics(actorId: string) {
+    return this.actors.get(actorId)?.robot.rigDiagnostics() ?? null;
+  }
+
   combatGeometry(actorId: string) {
     const endpoints = (mesh: Mesh3D | undefined) => {
       if (!mesh?.visible) return null;

@@ -212,7 +212,8 @@ Trainingの **HITBOX / 判定表示** で、武器の有効な線分・端点と
 描画は **`pixi.js@8.23.0` + `@pixi/3d@0.1.0`**。Three.jsや旧`pixi3d`パッケージは使用していません。
 
 - `View3D`と`Container3D`による3Dシーングラフ。
-- 立体メッシュを組み合わせたロボット、部位ごとの歩行・攻撃アニメーション。
+- 剛体の骨（腰・胸・頭・上腕・前腕・太もも・すね・足）を関節でつないだロボット。CPUで解くスケルトン（姿勢のブレンド、床に固定する足運び、腕と脚の2ボーンIK）が毎フレーム骨を配置し、メッシュを伸縮させません。
+- プレイヤーの手は当たり判定と同じ武器線分を握り、武器の位置はスケルトンではなく判定側の線分が決めます。詳細は [Skeleton and motion](docs/combat-architecture.md#skeleton-and-motion)。
 - PBRマテリアル、方向光、環境光、影、発光するバイザーやリアクター。
 - 奥行きのある床、サーバーラック、配管、ゲート、背景の都市。
 - 3Dの斬撃・弾・衝撃波・撃墜パーティクルと、画面上に投影した2Dのダメージ表示。
@@ -267,13 +268,15 @@ Vite+のグローバルCLIを使う場合も、`vp dev` / `vp test` / `vp build`
 | `src/game/audio.ts` | Web Audioによる合成効果音 |
 | `src/render/scene.ts` | PixiJS 3Dのステージ、カメラ、エフェクト |
 | `src/render/readability.ts` | 奥行きの目安、優先度付きラベル配置 |
-| `src/render/robot.ts` | ロボットの立体モデルとポーズ |
-| `src/render/motion.ts` | 当たり判定と同期する武器・方向別の攻撃ポーズ |
+| `src/render/robot.ts` | ロボットの剛体の骨と、解いたスケルトンの適用・診断 |
+| `src/render/rig/` | 描画に依存しないスケルトン：姿勢、ブレンド、足の接地、2ボーンIK、武器線分の握り |
+| `src/render/motion.ts` | 武器・方向別の攻撃ポーズのチャンネル（スケルトンの姿勢へ変換） |
 | `src/ui/hud.ts` / `styles.css` | 機体選択、HUD、ガイド、レスポンシブ表示 |
 | `src/main.ts` | 固定時間刻みのゲームループと連携 |
 | `tests/engine.test.ts` | 重要な戦闘ルールと入力だけによる全区画クリアの回帰テスト |
 | `tests/campaign.test.ts` | ステージ進行、補給、新敵の行動と中ボスの検査 |
 | `tests/motion.test.ts` | 攻撃タイミング・武器差・3段斬りのモーション検査 |
+| `tests/rig-*.test.ts` | スケルトンの検査：骨が伸びない、手が武器線分を握る、接地した足が滑らない、状態遷移で飛ばない |
 | `tests/browser/game.spec.ts` | 実際のブラウザー上での操作確認 |
 
 ### GitHub Pages

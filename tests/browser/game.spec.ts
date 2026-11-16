@@ -552,3 +552,98 @@ test('moving phase, dash and falling aerial meshes use the actual capsule checke
     for(const axis of ['x','y','z'] as const){expect(s.geometry.tip![axis]).toBeCloseTo(s.checked!.capsule.b[axis],4);for(const end of ['a','b'] as const)expect(s.geometry.trail![end][axis]).toBeCloseTo(s.checked!.capsule[end][axis],4);}
   }
 });
+
+
+test('jointed skeleton keeps rigid bones, grips the authoritative weapon and plants its feet', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
+  await training(page, 'compat');
+  type P = { x: number; y: number; z: number };
+  const distToSegment = (p: P, a: P, b: P) => {
+    const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z }, len2 = ab.x ** 2 + ab.y ** 2 + ab.z ** 2;
+    const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y + (p.z - a.z) * ab.z) / len2)) : 0;
+    return Math.hypot(p.x - a.x - ab.x * t, p.y - a.y - ab.y * t, p.z - a.z - ab.z * t);
+  };
+  const dist = (a: P, b: P) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+  for (const weapon of ['arc', 'pile', 'razor', 'lance', 'scythe'] as const) for (const facing of [1, -1] as const) {
+    const ticks = await page.evaluate(({ weapon, facing, empty }) => {
+      const { engine, scene } = (window as unknown as { __UPRISING__: { engine: GameEngine; scene: GameScene } }).__UPRISING__;
+      engine.restart(); engine.world.loadout.weapon = weapon; engine.world.props = []; engine.world.enemies = []; engine.world.effects = []; engine.world.messageTime = 0;
+      const p = engine.world.player; Object.assign(p, { x: 0, y: 0, z: 0, vx: 0, vy: 0, facing, invulnerable: 0 });
+      scene.update(engine.world, 1 / 60);
+      engine.update(1 / 60, { ...empty, attack: true, moveX: facing });
+      const ticks = [];
+      for (let i = 0; i < 240 && p.state === 'attack' && p.attack; i++) {
+        scene.update(engine.world, 1 / 60);
+        const rig = scene.rigDiagnostics(p.id)!;
+        ticks.push({ move: p.attack.move?.id ?? p.attack.name, scale: p.scale, spec: rig.spec, joints: rig.joints, main: rig.frame.weapon?.main ?? null, off: rig.frame.rig.grip?.off ?? null, collision: structuredClone(p.attack.collision) });
+        engine.update(1 / 60, empty);
+      }
+      return ticks;
+    }, { weapon, facing, empty: EMPTY_INPUT });
+    expect(ticks.length, `${weapon} ${facing}`).toBeGreaterThan(5);
+    expect(ticks.some(t => t.collision?.active), `${weapon} ${facing} has active frames`).toBe(true);
+    ticks.forEach((t, tick) => {
+      const j = t.joints, at = `${weapon} facing ${facing} tick ${tick} (${t.move})`;
+      for (const side of ['L', 'R'] as const) {
+        expect(Math.abs(dist(j[`shoulder${side}`], j[`elbow${side}`]) - t.spec.upperArm * t.scale), `${at} upperArm${side}`).toBeLessThan(1e-4);
+        expect(Math.abs(dist(j[`elbow${side}`], j[`hand${side}`]) - t.spec.forearm * t.scale), `${at} forearm${side}`).toBeLessThan(1e-4);
+        expect(Math.abs(dist(j[`hip${side}`], j[`knee${side}`]) - t.spec.thigh * t.scale), `${at} thigh${side}`).toBeLessThan(1e-4);
+        expect(Math.abs(dist(j[`knee${side}`], j[`ankle${side}`]) - t.spec.shin * t.scale), `${at} shin${side}`).toBeLessThan(1e-4);
+      }
+      if (!t.collision?.active) return;
+      expect(t.main, `${at} hands constrained to the weapon`).not.toBeNull();
+      const { a, b } = t.collision.capsule, offSide = t.main === 'L' ? 'R' : 'L';
+      expect(distToSegment(j[`hand${t.main!}`], a, b), `${at} main hand on capsule`).toBeLessThan(1e-3);
+      if (t.off !== null) expect(distToSegment(j[`hand${offSide}`], a, b), `${at} off hand on capsule`).toBeLessThan(1e-3);
+    });
+    if (weapon === 'lance' && facing === 1) {
+      await page.evaluate(({ empty }) => {
+        const { engine, scene } = (window as unknown as { __UPRISING__: { engine: GameEngine; scene: GameScene } }).__UPRISING__;
+        engine.restart(); engine.world.loadout.weapon = 'lance'; engine.world.props = []; engine.world.enemies = []; engine.world.effects = []; engine.world.messageTime = 0;
+        const p = engine.world.player; Object.assign(p, { x: 0, y: 0, z: 0, vx: 0, vy: 0, facing: 1, invulnerable: 0 });
+        engine.update(1 / 60, { ...empty, attack: true, moveX: 1 });
+        for (let i = 0; i < 120 && !p.attack?.collision?.active; i++) { scene.update(engine.world, 1 / 60); engine.update(1 / 60, empty); }
+        engine.world.hitstop = 100; scene.update(engine.world, 1 / 60);
+      }, { empty: EMPTY_INPUT });
+      expect((await snapshot(page)).player.attack?.collision?.active).toBe(true);
+      await page.screenshot({ path: 'test-results/screenshots/rig-lance-tilt.png' });
+    }
+  }
+  const run = await page.evaluate(({ empty }) => {
+    const { engine, scene } = (window as unknown as { __UPRISING__: { engine: GameEngine; scene: GameScene } }).__UPRISING__;
+    engine.restart(); engine.world.props = []; engine.world.enemies = []; engine.world.effects = []; engine.world.messageTime = 0;
+    const p = engine.world.player; Object.assign(p, { x: 0, y: 0, z: 0, vx: 0, vy: 0, facing: 1, invulnerable: 0 });
+    scene.update(engine.world, 1 / 60);
+    const samples = [];
+    // Ten unsampled ticks let the run cycle engage, so stances are judged at running speed, not standing.
+    for (let i = 0; i < 50; i++) {
+      engine.update(1 / 60, { ...empty, moveX: 1 }); scene.update(engine.world, 1 / 60);
+      const { joints, frame } = scene.rigDiagnostics(p.id)!;
+      if (i >= 10) samples.push({ x: p.x, heelL: joints.heelL, toeL: joints.toeL, heelR: joints.heelR, toeR: joints.toeR, feet: frame.feet });
+    }
+    return samples;
+  }, { empty: EMPTY_INPUT });
+  expect(run.at(-1)!.x - run[0]!.x).toBeGreaterThan(2);
+  const plantedTicks = { L: '', R: '' };
+  for (const side of ['L', 'R'] as const) {
+    // A pitched foot rolls about its contact: the toe when pitch >= 0, the heel when pitch < 0.
+    const contact = (s: typeof run[number]) => s.feet[`pitch${side}`] >= 0 ? { end: 'toe', at: s[`toe${side}`] } : { end: 'heel', at: s[`heel${side}`] };
+    let longest = 0, current = 0;
+    run.forEach((s, tick) => {
+      for (const end of ['heel', 'toe'] as const) expect(s[`${end}${side}`].y, `${end}${side} tick ${tick} above the floor`).toBeGreaterThan(-1e-3);
+      const planted = s.feet[`planted${side}`];
+      current = planted ? current + 1 : 0; longest = Math.max(longest, current);
+      if (!planted) return;
+      plantedTicks[side] += `${tick},`;
+      const now = contact(s);
+      expect(Math.abs(now.at.y), `${side} tick ${tick} planted ${now.end} on the floor`).toBeLessThan(1e-3);
+      const previous = tick > 0 && run[tick - 1]!.feet[`planted${side}`] ? contact(run[tick - 1]!) : null;
+      if (previous?.end === now.end) for (const axis of ['x', 'z'] as const) {
+        expect(Math.abs(now.at[axis] - previous.at[axis]), `${side} tick ${tick} planted ${now.end} does not slide in ${axis}`).toBeLessThan(1e-3);
+      }
+    });
+    expect(longest, `${side} plants for at least two consecutive ticks`).toBeGreaterThanOrEqual(2);
+  }
+  expect(plantedTicks.L, 'feet alternate rather than planting together').not.toBe(plantedTicks.R);
+  await expectRenderedArena(page); expect(errors).toEqual([]);
+});
