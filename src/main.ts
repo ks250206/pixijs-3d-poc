@@ -1,5 +1,6 @@
 import { GameEngine } from './game/engine';
 import { GameInput } from './game/input';
+import { mergeInputFrames, clearInputEdges } from './game/action-buffer';
 import { GameAudio } from './game/audio';
 import { createCandidates } from './game/loadouts';
 import { EMPTY_INPUT } from './game/types';
@@ -74,6 +75,7 @@ async function main() {
     restart: () => { input.releaseAll(); pending = { ...EMPTY_INPUT }; engine.restart(); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); },
     newRun,
     toggleHitboxes: () => scene.toggleHitboxes(),
+    toggleDetails: () => scene.toggleDetails(),
     toggleAudio: () => { audio.unlock(); return audio.toggle(); },
     fullscreen: () => {
       if (document.fullscreenElement) void document.exitFullscreen();
@@ -81,6 +83,7 @@ async function main() {
     },
     nextSector: () => engine.nextSector(),
     claimSupply: (choice) => engine.claimSupply(choice),
+    claimUpgrade: (id) => engine.claimUpgrade(id),
     getGraphics: () => scene.getGraphics(),
     setGraphics: (settings) => scene.setGraphics(settings),
   }, candidates);
@@ -119,30 +122,15 @@ async function main() {
       fpsFrames = 0;
     }
     const sampled = input.sample();
-    pending = {
-      ...sampled,
-      attack: pending.attack || sampled.attack,
-      smash: pending.smash || sampled.smash,
-      special: pending.special || sampled.special,
-      jump: pending.jump || sampled.jump,
-      dodge: pending.dodge || sampled.dodge,
-      grab: pending.grab || sampled.grab,
-      pause: pending.pause || sampled.pause,
-      flickX: sampled.flickX || pending.flickX,
-      flickZ: sampled.flickZ || pending.flickZ,
-    };
+    pending = mergeInputFrames(pending, sampled);
     accumulated += dt;
     let steps = 0;
     while (accumulated >= 1 / 60 && steps++ < 6) {
       if (pending.pause && ui.handlePauseInput()) pending.pause = false;
-      const acceptsActions = engine.world.hitstop <= 0 || pending.pause || (engine.world.phase !== 'playing' && engine.world.phase !== 'sector-clear');
       engine.update(1 / 60, pending);
       audio.update(engine.world);
-      if (acceptsActions) pending = {
-        ...pending,
-        attack: false, smash: false, special: false, jump: false,
-        dodge: false, grab: false, pause: false, flickX: 0, flickZ: 0,
-      };
+      // The simulation owns buffering, including hitstop; never resubmit an edge.
+      pending = clearInputEdges(pending);
       accumulated -= 1 / 60;
     }
     scene.update(engine.world, dt);

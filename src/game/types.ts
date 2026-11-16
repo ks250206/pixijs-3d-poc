@@ -2,6 +2,7 @@ import type { Capsule } from './combat/geometry';
 import type { Coordination } from './director';
 import type { ObjectiveState } from './objectives';
 import type { MoveDefinition } from './combat/moves';
+import type { RunUpgrade, UpgradeChoice } from './upgrades';
 export type ActorKind = 'player' | 'scout' | 'bruiser' | 'gunner' | 'drone' | 'sentinel' | 'charger' | 'leaper' | 'artillery' | 'rider' | 'captain' | 'minion' | 'sniper' | 'sapper' | 'warden' | 'boss';
 export type SupplyChoice = 'repair' | 'power' | 'stock';
 export type ActionState = 'idle' | 'run' | 'jump' | 'fall' | 'recover' | 'attack' | 'charge' | 'dodge' | 'airdodge' | 'wavedash' | 'hurt' | 'grab' | 'grabbed' | 'dead' | 'shield';
@@ -28,9 +29,24 @@ export interface Loadout {
   modules: { weapon: 'quick' | 'breaker'; neutral: 'focused' | 'split'; side: 'cross' | 'push'; down: 'launch' | 'stagger' };
 }
 
+export type BufferedAction = 'attack' | 'smash' | 'special' | 'jump' | 'dodge' | 'grab';
+export interface ActionPress {
+  action: BufferedAction;
+  moveX: number;
+  moveZ: number;
+  aimX: number;
+  aimZ: number;
+  dash: boolean;
+}
+
 export interface InputFrame {
   moveX: number;
   moveZ: number;
+  // Omitted aiming axes retain the keyboard/legacy movement-direction mapping.
+  aimX?: number;
+  aimZ?: number;
+  // Device adapters preserve directions at the press, including between render frames.
+  presses?: readonly ActionPress[];
   attack: boolean;
   attackHeld: boolean;
   smash: boolean;
@@ -167,6 +183,18 @@ export interface ArenaProp {
   direction: 1 | -1;
 }
 
+/** Arrival countdown; render the floor marker only inside the warning duration. */
+export interface SpawnWarning {
+  id: string;
+  kind: ActorKind;
+  x: number;
+  z: number;
+  remaining: number;
+  duration: number;
+  source: 'wave' | 'relay' | 'lockdown';
+  sourceId?: string;
+}
+
 export interface WorldState {
   objective: ObjectiveState;
   coordination: Coordination;
@@ -178,6 +206,10 @@ export interface WorldState {
   completedSectors: number;
   supplyClaimed: boolean;
   supply: SupplyChoice | null;
+  upgrades: RunUpgrade[];
+  upgradeChoices: UpgradeChoice[];
+  upgradeClaimed: boolean;
+  pendingSpawns: SpawnWarning[];
   wave: number;
   player: Actor;
   enemies: Actor[];
@@ -197,6 +229,7 @@ export interface WorldState {
   shake: number;
   hitstop: number;
   specialCooldown: number;
+  recoveryAvailable: boolean;
   waveTimer: number;
   cameraX: number;
   arenaMin: number;

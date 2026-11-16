@@ -21,7 +21,9 @@ export function runCampaignInputs(
     if (w.objective.complete && w.objective.kind !== "clear") completedObjectives.add(w.sector);
     if (stop() || w.phase === "won" || w.phase === "lost") break;
     const input = frame();
+    const recoveryReady = w.recoveryAvailable;
     if (w.phase === "sector-clear") {
+      if (!w.upgradeClaimed && w.upgradeChoices[0]) game.claimUpgrade(w.upgradeChoices[0].id);
       game.claimSupply(w.stocks < 3 ? "stock" : "repair");
       input.moveX = 1;
     } else if (p.alive) {
@@ -41,7 +43,7 @@ export function runCampaignInputs(
           if (p.facing !== Math.sign(dx) && Math.abs(dx) > 0.2) input.moveX = Math.sign(dx);
           else input.attack = true;
         }
-      } else if (!target && (p.x < w.arenaMin || p.x > w.arenaMax) && w.specialCooldown <= 0) {
+      } else if (!target && (p.x < w.arenaMin || p.x > w.arenaMax) && recoveryReady) {
         input.moveZ = -1;
         input.moveX = Math.sign((w.arenaMin + w.arenaMax) / 2 - p.x);
         input.special = true;
@@ -50,7 +52,7 @@ export function runCampaignInputs(
         const dx = target.x - p.x,
           dz = target.z - p.z;
         const outside = p.x < w.arenaMin || p.x > w.arenaMax;
-        if (outside && p.y < 2 && w.specialCooldown <= 0) {
+        if (outside && p.y < 2 && recoveryReady) {
           input.moveZ = -1;
           input.moveX = Math.sign((w.arenaMin + w.arenaMax) / 2 - p.x);
           input.special = true;
@@ -150,7 +152,11 @@ export function runCampaignInputs(
             w.loadout.special === "pulse"
           ) {
             input.moveZ = 0;
-            input.special = true;
+            // A direction held with L selects PHASE CROSS for every chassis.
+            // Turn first, then fire the neutral pulse with no movement held.
+            // This also prevents a long dash from carrying the bot over an edge.
+            input.moveX = p.facing === Math.sign(dx) ? 0 : Math.sign(dx);
+            input.special = input.moveX === 0;
             lastAction = tick;
           }
         }

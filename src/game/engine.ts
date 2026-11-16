@@ -1,5 +1,7 @@
 import { EncounterDirector, emptyCoordination } from './director';
+import { ActionBuffer } from './action-buffer';
 import { createObjective, objectiveProps } from './objectives';
+import { createUpgradeChoices, getUpgradeDefinition, upgradeMove, upgradeRank, type UpgradeId } from './upgrades';
 import { playerMove, specialMove, utilityMove, totalFrames, canCancel, type MoveDefinition, type BehaviorId, type CancelAction } from './combat/moves';
 import { sweptContact, sampleWeapon, bodyHurtbox, type Vec3 } from './combat/geometry';
 import { DODGE, DEPTH_LIMIT, PLATFORM_DEPTH } from './movement';
@@ -7,7 +9,7 @@ import { createCandidates, seededRandom } from './loadouts';
 import { createArena, insideProp } from './arena';
 import { ARENA_HALF_WIDTH, SECTOR_SPAN, STAGES, TRAINING_WAVES } from './campaign';
 import { createPattern, insideHazard } from './patterns';
-import { EMPTY_INPUT, type Actor, type ActorKind, type AreaHazard, type ArenaProp, type AttackDirection, type AttackKind, type Effect, type GameMode, type InputFrame, type Loadout, type Projectile, type SupplyChoice, type WorldState } from './types';
+import { EMPTY_INPUT, type Actor, type ActorKind, type AreaHazard, type ArenaProp, type AttackDirection, type AttackKind, type BufferedAction, type Effect, type GameMode, type InputFrame, type Loadout, type Projectile, type SpawnWarning, type SupplyChoice, type WorldState } from './types';
 
 const GRAVITY = 27;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
@@ -34,6 +36,9 @@ interface Strike {
   fired: boolean;
   motionStarted?: boolean;
   source: string;
+  upgradeTargets?: Set<string>;
+  upgradeTriggered?: boolean;
+  tipRefunded?: boolean;
 }
 
 interface ActorMemory {
@@ -60,12 +65,16 @@ interface ActorMemory {
   spawnTime: number;
   bossBroken: boolean;
   hazardCooldown: number;
+  upgradeAirUsed: boolean;
+  upgradeNormalHits: number;
+  upgradeFlow: number;
 }
 
 interface ProjectileMemory {
   originStrike?: Strike;
   hit?: Set<string>;
   pierce?: number;
+  bounces?: number;
   kind: AttackKind;
   damage: number;
   force: number;
@@ -83,7 +92,9 @@ export class GameEngine {
   private comboAge = 0;
   private sectorCleared = false;
   private director = new EncounterDirector();
+  private actions = new ActionBuffer();
   private startingLoadout: Loadout;
+  private upgradeBursts: { x: number; y: number; z: number; delay: number; radius: number; damage: number; force: number }[] = [];
 
   constructor(seed = 1) {
     this.random = seededRandom(seed);
@@ -94,11 +105,12 @@ export class GameEngine {
       objective: createObjective(0, 'campaign'), coordination: emptyCoordination(),
       phase: 'ready', mode: 'campaign', time: 0, seed: seed >>> 0,
       sector: 0, completedSectors: 0, supplyClaimed: false, supply: null, wave: 1, player,
+      upgrades: [], upgradeChoices: [], upgradeClaimed: false, pendingSpawns: [],
       enemies: [this.makeActor('scout', 2, -1), this.makeActor('bruiser', 6, 0.8), this.makeActor('drone', 8, -2)],
       projectiles: [], hazards: [], effects: [], props: createArena(0), loadout: structuredClone(loadout),
       stocks: 3, kills: 0, combo: 0, bestCombo: 0, score: 0,
       lastMove: 'SYSTEM READY', message: 'BREAK THE DIRECTIVE', messageTime: 0,
-      shake: 0, hitstop: 0, specialCooldown: 0, waveTimer: 0,
+      shake: 0, hitstop: 0, specialCooldown: 0, recoveryAvailable: true, waveTimer: 0,
       cameraX: 0, arenaMin: -ARENA_HALF_WIDTH, arenaMax: ARENA_HALF_WIDTH, events: [],
     };
   }
@@ -113,14 +125,17 @@ export class GameEngine {
     this.comboAge = 0;
     this.sectorCleared = false;
     this.director.reset();
+    this.actions.reset();
+    this.upgradeBursts = [];
     const player = this.makeActor('player', -5, 0);
     this.world = {
       objective: createObjective(0, mode), coordination: emptyCoordination(),
       phase: 'playing', mode, time: 0, seed, sector: 0, completedSectors: 0, supplyClaimed: false, supply: null, wave: 1,
+      upgrades: [], upgradeChoices: [], upgradeClaimed: false, pendingSpawns: [],
       player, enemies: [], projectiles: [], hazards: [], effects: [], props: createArena(0), loadout: structuredClone(loadout),
       stocks: 3, kills: 0, combo: 0, bestCombo: 0, score: 0,
       lastMove: 'SYSTEM ONLINE', message: mode === 'training' ? 'TRAINING // 機体を試そう' : '01 // THE FOUNDRY', messageTime: 3,
-      shake: 0, hitstop: 0, specialCooldown: 0, waveTimer: 0,
+      shake: 0, hitstop: 0, specialCooldown: 0, recoveryAvailable: true, waveTimer: 0,
       cameraX: 0, arenaMin: -ARENA_HALF_WIDTH, arenaMax: ARENA_HALF_WIDTH, events: [],
     };
     this.world.props.push(...objectiveProps(0, this.world.objective));
@@ -130,10 +145,12 @@ export class GameEngine {
   }
 
   pause(): void {
+    this.actions.reset();
     if (this.world.phase === 'playing' || this.world.phase === 'sector-clear') this.world.phase = 'paused';
   }
 
   resume(): void {
+    this.actions.reset();
     if (this.world.phase === 'paused') this.world.phase = this.sectorCleared ? 'sector-clear' : 'playing';
   }
 
@@ -142,6 +159,7 @@ export class GameEngine {
   claimSupply(choice: SupplyChoice): boolean {
     const w = this.world;
     if (w.mode !== 'campaign' || w.supplyClaimed || !(w.phase === 'sector-clear' || (w.phase === 'paused' && this.sectorCleared))) return false;
+    if (choice === 'repair' && w.player.damage <= 0 || choice === 'stock' && w.stocks >= 4) return false;
     if (choice === 'repair') w.player.damage = Math.max(0, w.player.damage - 40);
     else if (choice === 'power') w.loadout = { ...w.loadout, power: w.loadout.power + 0.08 };
     else if (choice === 'stock') w.stocks = Math.min(4, w.stocks + 1);
@@ -150,12 +168,30 @@ export class GameEngine {
     return true;
   }
 
+  claimUpgrade(id: UpgradeId): boolean {
+    const w = this.world;
+    if (w.mode !== 'campaign' || w.upgradeClaimed || !(w.phase === 'sector-clear' || w.phase === 'paused' && this.sectorCleared)) return false;
+    const choice = w.upgradeChoices.find((entry) => entry.id === id);
+    if (!choice || upgradeRank(w.upgrades, id) >= choice.maxRank) return false;
+    const existing = w.upgrades.find((entry) => entry.id === id);
+    if (existing) existing.rank++;
+    else w.upgrades.push({ id, rank: 1 });
+    if (id === 'weapon-tune') w.loadout.modules.weapon = w.loadout.modules.weapon === 'quick' ? 'breaker' : 'quick';
+    if (id === 'neutral-tune') w.loadout.modules.neutral = w.loadout.modules.neutral === 'focused' ? 'split' : 'focused';
+    if (id === 'side-tune') w.loadout.modules.side = w.loadout.modules.side === 'cross' ? 'push' : 'cross';
+    w.upgradeClaimed = true;
+    w.message = `BUILD UPDATED // ${getUpgradeDefinition(id).name}`; w.messageTime = 3;
+    return true;
+  }
+
   nextSector(): void {
     const w = this.world;
     if (w.phase !== 'sector-clear' || w.sector >= STAGES.length - 1) return;
-    if (!w.supplyClaimed) this.claimSupply('repair');
+    if (w.upgradeChoices.length && !w.upgradeClaimed) return;
+    if (!w.supplyClaimed) this.claimSupply(w.player.damage > 0 ? 'repair' : 'power');
     w.sector++;
     w.supplyClaimed = false; w.supply = null;
+    w.upgradeClaimed = false; w.upgradeChoices = []; w.pendingSpawns = []; this.upgradeBursts = [];
     w.wave = 1;
     w.arenaMin = w.sector * SECTOR_SPAN - ARENA_HALF_WIDTH;
     w.arenaMax = w.sector * SECTOR_SPAN + ARENA_HALF_WIDTH;
@@ -171,6 +207,7 @@ export class GameEngine {
     w.player.state = 'idle';
     w.player.attack = null;
     this.resetMemory(w.player);
+    this.actions.reset(); w.recoveryAvailable = true;
     w.effects = [];
     w.projectiles = []; w.hazards = [];
     w.enemies = [];
@@ -193,12 +230,15 @@ export class GameEngine {
       if (w.phase === 'paused') this.resume(); else this.pause();
       return;
     }
-    if (w.phase === 'paused') return;
+    if (w.phase === 'paused') { this.actions.reset(); return; }
     w.time += realDt;
     this.updateEffects(realDt);
     w.shake = approach(w.shake, 0, realDt * 2.2);
     w.messageTime = Math.max(0, w.messageTime - realDt);
-    if (w.phase === 'ready' || w.phase === 'lost' || w.phase === 'won') return;
+    if (w.phase === 'ready' || w.phase === 'lost' || w.phase === 'won') { this.actions.reset(); return; }
+
+    if (w.player.alive) this.actions.capture(input);
+    else this.actions.reset();
 
     if (w.hitstop > 0) {
       w.hitstop = Math.max(0, w.hitstop - realDt);
@@ -206,8 +246,10 @@ export class GameEngine {
     }
     const dt = realDt;
     w.specialCooldown = Math.max(0, w.specialCooldown - dt);
+    this.updateUpgradeBursts(dt);
+    this.updatePendingSpawns(dt);
     this.comboAge += dt;
-    if (this.comboAge > 2.3) w.combo = 0;
+    if (this.comboAge > 2.3) { w.combo = 0; this.memory(w.player).upgradeNormalHits = 0; }
 
     for (const actor of [w.player, ...w.enemies]) {
       const mem = this.memory(actor);
@@ -218,6 +260,8 @@ export class GameEngine {
       mem.hazardCooldown = Math.max(0, mem.hazardCooldown - dt);
       mem.dashTimer = Math.max(0, mem.dashTimer - dt);
       mem.comboTimer = Math.max(0, mem.comboTimer - dt);
+      mem.upgradeFlow = Math.max(0, mem.upgradeFlow - dt);
+      if (actor.kind === 'player' && this.isGrounded(actor)) mem.upgradeAirUsed = false;
       if (!actor.alive) continue;
       if (actor.bossPhase === 'transition') {
         mem.phaseTimer = Math.max(0, mem.phaseTimer - dt);
@@ -234,8 +278,9 @@ export class GameEngine {
       }
     }
 
-    if (w.mode !== 'training') this.director.update(w, dt);
     this.updatePlayer(dt, input);
+    this.actions.advance(dt);
+    if (w.mode !== 'training') this.director.update(w, dt, w.enemies.filter(enemy => this.enemyCanAttack(enemy)));
     if (w.phase !== 'sector-clear') for (const enemy of w.enemies) this.updateEnemy(enemy, dt);
     // Prepare action velocities/timing, resolve all movement, then test the pose rendered this tick.
     for (const actor of [w.player, ...w.enemies]) if (actor.alive) this.prepareAttack(actor, dt);
@@ -260,13 +305,14 @@ export class GameEngine {
       mem.respawnTimer -= dt;
       if (mem.respawnTimer <= 0) this.respawn();
     }
+    w.recoveryAvailable = w.player.alive && !this.memory(w.player).recoveryUsed;
     this.updateObjective(dt);
     if (w.phase === 'sector-clear') {
       if (w.player.x > w.arenaMax - 2) this.nextSector();
-    } else if (w.phase === 'playing' && !w.enemies.some((enemy) => enemy.alive)) {
+    } else if (w.phase === 'playing' && !w.enemies.some((enemy) => enemy.alive) && !w.pendingSpawns.length) {
       w.waveTimer += dt;
       if (w.waveTimer > 1.35) this.completeWave();
-    }
+    } else w.waveTimer = 0;
     const targetCamera = w.sector * SECTOR_SPAN + clamp(w.player.x - w.sector * SECTOR_SPAN, -8, 8) * 0.55;
     w.cameraX += (targetCamera - w.cameraX) * Math.min(1, dt * 3.5);
   }
@@ -287,6 +333,7 @@ export class GameEngine {
   private resetMemory(actor: Actor): void {
     this.memories.set(actor.id, {
       phaseTimer: 0, actionTimer: 0, forced: 0, jumps: 0, airDodgeUsed: false, airDodgeDown: false, recoveryUsed: false, lastJumpHeld: false,
+      upgradeAirUsed: false, upgradeNormalHits: 0, upgradeFlow: 0,
       charge: 0, chargeDirection: 'forward', strike: null,
       comboStage: 0, comboTimer: 0, dashTimer: 0,
       cooldown: 0.7 + this.random() * 1.5, pattern: 0, grabTarget: null, grabbedBy: null,
@@ -306,20 +353,24 @@ export class GameEngine {
     if (!p.alive) return;
     const m = this.memory(p);
     const ground = this.isGrounded(p);
+    const wasJumpHeld = m.lastJumpHeld;
+    m.lastJumpHeld = input.jumpHeld;
     let free = m.actionTimer <= 0 || (p.state === 'wavedash' && p.stateTime > 0.09);
+    let cancelled: CancelAction | undefined;
     if (!free && p.state === 'attack' && p.attack?.move && m.strike) {
       const requests: CancelAction[] = [];
-      if (input.dodge && (ground || !m.airDodgeUsed)) requests.push('dodge');
-      if (input.jump && (ground || m.jumps < 2)) requests.push('jump');
-      if (input.special && w.specialCooldown <= 0 && !(this.direction(input, p.facing) === 'up' && p.y > .05 && m.recoveryUsed)) requests.push('special');
-      if (input.attack) requests.push('attack');
-      const selected = requests.find(action => canCancel(p.attack!.move!, p.attack!.elapsed * 60, m.strike!.connected, action));
-      if (selected) {
-        // Execute exactly the approved action; simultaneous unlisted inputs cannot steal it.
-        input = { ...input, dodge: selected === 'dodge', jump: selected === 'jump', special: selected === 'special', attack: selected === 'attack', smash: false, grab: false, dash: false };
+      if (this.actions.peek('dodge') && (ground || !m.airDodgeUsed)) requests.push('dodge');
+      if (this.actions.peek('jump') && (ground || m.jumps < 2)) requests.push('jump');
+      const special = this.actions.peek('special');
+      if (special && this.canUseSpecial(special)) requests.push('special');
+      if (this.actions.peek('attack')) requests.push('attack');
+      cancelled = requests.find(action => canCancel(p.attack!.move!, p.attack!.elapsed * 60, m.strike!.connected, action));
+      if (cancelled) {
+        // Only the approved action can run this tick; other presses remain bounded by their expiry.
         free = true; m.actionTimer = 0; m.strike = null; p.attack = null; p.state = ground ? 'idle' : 'fall';
       }
     }
+    const requested = (action: BufferedAction) => free && (!cancelled || cancelled === action) && this.actions.peek(action);
     if (p.state === 'grabbed') return;
     if (p.state === 'hurt') {
       // Directional influence: a modest adjustment during hitstun, not an escape.
@@ -331,8 +382,10 @@ export class GameEngine {
       const target = w.enemies.find((enemy) => enemy.id === m.grabTarget && enemy.alive);
       m.grabTimer -= dt;
       if (!target || m.grabTimer <= 0) { this.releaseGrab(p); return; }
-      if (input.attack || input.smash || input.grab || Math.abs(input.moveX) > 0.4 || Math.abs(input.moveZ) > 0.4) {
-        this.throwTarget(p, target, this.direction(input, p.facing));
+      const action = (['attack', 'smash', 'grab'] as const).find(key => this.actions.peek(key));
+      if (action || Math.abs(input.moveX) > 0.4 || Math.abs(input.moveZ) > 0.4) {
+        const throwing = action ? this.actions.consume(action, input) : input;
+        this.throwTarget(p, target, this.direction(throwing, p.facing));
       }
       return;
     }
@@ -341,99 +394,117 @@ export class GameEngine {
       if (p.attack) p.attack.charge = m.charge;
       p.vx *= Math.exp(-dt * 18);
       p.vz *= Math.exp(-dt * 18);
-      const held = input.smashHeld;
-      if (!held || m.charge >= 1) this.releaseSmash();
+      if (!input.smashHeld || m.charge >= 1) this.releaseSmash();
       return;
     }
     if (input.dash && ground) m.dashTimer = 0.25;
 
-    if (free && input.dodge) {
+    if (requested('dodge') && (ground || !m.airDodgeUsed)) {
+      const dodge = this.actions.consume('dodge', input);
+      const magnitude = Math.hypot(dodge.moveX, dodge.moveZ);
       if (ground) {
-        const magnitude = Math.hypot(input.moveX, input.moveZ);
         p.state = 'dodge'; p.stateTime = 0;
         m.actionTimer = DODGE.groundDuration;
         p.invulnerable = DODGE.groundInvulnerability;
-        p.vx = magnitude > 0.3 ? input.moveX / magnitude * DODGE.groundX : p.facing * DODGE.groundX;
-        p.vz = magnitude > 0.3 ? input.moveZ / magnitude * DODGE.groundZ : 0;
+        p.vx = magnitude > 0.3 ? dodge.moveX / magnitude * DODGE.groundX : p.facing * DODGE.groundX;
+        p.vz = magnitude > 0.3 ? dodge.moveZ / magnitude * DODGE.groundZ : 0;
         w.lastMove = 'GROUND DASH';
-        w.events.push({ type: 'dodge' });
-      } else if (!m.airDodgeUsed) {
-        const magnitude = Math.hypot(input.moveX, input.moveZ);
+      } else {
         p.state = 'airdodge'; p.stateTime = 0;
         m.actionTimer = DODGE.airDuration;
         m.airDodgeUsed = true;
-        m.airDodgeDown = input.moveZ > 0.3;
+        m.airDodgeDown = dodge.moveZ > 0.3;
         p.invulnerable = DODGE.airInvulnerability;
-        p.vx = magnitude > 0.3 ? input.moveX / magnitude * DODGE.air : 0;
-        p.vy = magnitude > 0.3 ? -input.moveZ / magnitude * DODGE.air : 0;
+        p.vx = magnitude > 0.3 ? dodge.moveX / magnitude * DODGE.air : 0;
+        p.vy = magnitude > 0.3 ? -dodge.moveZ / magnitude * DODGE.air : 0;
         p.vz = 0;
         w.lastMove = 'AIR DODGE';
-        w.events.push({ type: 'dodge' });
       }
-      if (p.state === 'dodge' || p.state === 'airdodge') {
-        this.effect('trail', p.x, p.y + 0.8, p.z, 0.35, 1.3, w.loadout.color);
-        return;
-      }
+      w.events.push({ type: 'dodge' });
+      this.effect('trail', p.x, p.y + 0.8, p.z, 0.35, 1.3, w.loadout.color);
+      return;
     }
 
-    if (free && input.jump && (ground || m.jumps < 2)) {
+    let jumped = false;
+    if (requested('jump') && (ground || m.jumps < 2)) {
+      this.actions.consume('jump', input);
       m.jumps = ground ? 1 : m.jumps + 1;
       p.vy = m.jumps === 1 ? 11 : 10.5;
       p.state = 'jump'; p.stateTime = 0;
       m.actionTimer = 0;
+      jumped = true;
       w.lastMove = m.jumps === 1 ? 'JUMP' : 'DOUBLE JUMP';
       w.events.push({ type: 'jump' });
       this.effect('shockwave', p.x, Math.max(0.02, p.y), p.z, 0.28, 0.8, w.loadout.color);
     }
-    if (m.lastJumpHeld && !input.jumpHeld && p.vy > 5.2 && p.state !== 'attack' && p.state !== 'airdodge') p.vy = 5.2;
-    m.lastJumpHeld = input.jumpHeld;
+    const ordinaryAerial = p.state === 'attack' && p.attack?.kind === 'aerial';
+    if ((wasJumpHeld || jumped) && !input.jumpHeld && p.vy > 5.2 && p.state !== 'airdodge' && (p.state !== 'attack' || ordinaryAerial)) p.vy = 5.2;
 
-    // A jump changes vertical velocity before position integration. Re-evaluate
-    // contact so simultaneous jump + attack inputs select an aerial immediately.
+    // A jump changes velocity before integration; a simultaneous attack is already aerial.
     const actionGround = this.isGrounded(p);
-    if (free && input.special && w.specialCooldown <= 0) { this.special(input); return; }
-    if (free && input.grab && actionGround) { this.grab(); return; }
-    if (free && input.smash && actionGround) {
-      const facing = input.moveX > 0.3 ? 1 : input.moveX < -0.3 ? -1 : p.facing;
+    const special = requested('special');
+    if (special && this.canUseSpecial(special)) { this.special(this.actions.consume('special', input)); return; }
+    if (requested('grab') && actionGround) { this.actions.consume('grab', input); this.grab(); return; }
+    if (requested('smash') && actionGround) {
+      const smash = this.actions.consume('smash', input);
+      const aimX = smash.aimX ?? smash.moveX;
+      const facing = aimX > 0.3 ? 1 : aimX < -0.3 ? -1 : p.facing;
       p.facing = facing;
       m.charge = 0;
-      m.chargeDirection = this.direction(input, facing);
+      m.chargeDirection = this.direction(smash, facing);
       if (m.chargeDirection === 'neutral') m.chargeDirection = 'forward';
       p.state = 'charge'; p.stateTime = 0;
       p.attack = { name: 'CHARGING', kind: 'smash', direction: m.chargeDirection, elapsed: 0, duration: 1, range: 3, charge: 0, activeStart: 1, activeEnd: 1, combo: 0 };
       w.lastMove = `${m.chargeDirection.toUpperCase()} SMASH // CHARGE`;
       return;
     }
-    if (free && (input.attack || input.smash)) {
-      const direction = this.direction(input, p.facing);
+    const attackAction = requested('attack') ? 'attack' : requested('smash') ? 'smash' : null;
+    if (attackAction) {
+      const attack = this.actions.consume(attackAction, input);
+      const direction = this.direction(attack, p.facing);
       if (!actionGround) {
         this.playerAttack('aerial', direction);
-      } else if (m.dashTimer > 0 || Math.abs(p.vx) > 8.2 * w.loadout.speed) {
+        this.movePlayer(dt, input, false);
+      } else if (attack.dash || m.dashTimer > 0 || Math.abs(p.vx) > 8.2 * w.loadout.speed) {
+        if (Math.abs(attack.moveX) > 0.3) p.facing = attack.moveX > 0 ? 1 : -1;
         this.playerAttack('dash', 'forward');
       } else if (direction !== 'neutral') {
-        if (Math.abs(input.moveX) > 0.3) p.facing = input.moveX > 0 ? 1 : -1;
+        const aimX = attack.aimX ?? attack.moveX;
+        if (Math.abs(aimX) > 0.3) p.facing = aimX > 0 ? 1 : -1;
         this.playerAttack('tilt', direction === 'back' ? 'forward' : direction);
       } else this.playerAttack('jab', 'neutral');
       return;
     }
-
-    if (free && p.state !== 'airdodge' && p.state !== 'dodge') {
-      if (actionGround && Math.abs(input.moveX) > 0.15) p.facing = input.moveX > 0 ? 1 : -1;
-      const speed = (m.dashTimer > 0 ? 10.4 : 6.2) * w.loadout.speed;
-      const sliding = p.state === 'wavedash';
-      const targetX = input.moveX * speed;
-      if (!sliding) p.vx = approach(p.vx, targetX, dt * (actionGround ? 46 : 17));
-      else if (Math.abs(input.moveX) > 0.1 && Math.sign(input.moveX) !== Math.sign(p.vx)) p.vx = approach(p.vx, targetX, dt * 24);
-      p.vz = approach(p.vz, input.moveZ * 4.4 * w.loadout.speed, dt * (actionGround ? 35 : 14));
-      if (!sliding) p.state = !actionGround ? p.vy > 0 ? 'jump' : 'fall' : Math.hypot(p.vx, p.vz) > 0.4 ? 'run' : 'idle';
-      if (!actionGround && input.moveZ > 0.65 && p.vy < 0) p.vy = Math.max(-22, p.vy - dt * 55);
-    }
+    this.movePlayer(dt, input, free);
   }
 
-  private direction(input: InputFrame, facing: number): AttackDirection {
-    if (Math.abs(input.moveZ) > 0.5 && Math.abs(input.moveZ) >= Math.abs(input.moveX) * 0.8) return input.moveZ < 0 ? 'up' : 'down';
-    if (Math.abs(input.moveX) > 0.3) return Math.sign(input.moveX) === facing ? 'forward' : 'back';
+  private movePlayer(dt: number, input: InputFrame, free: boolean): void {
+    const w = this.world, p = w.player, m = this.memory(p);
+    const ground = this.isGrounded(p);
+    const ordinaryAerial = !ground && p.state === 'attack' && p.attack?.kind === 'aerial';
+    if ((!free && !ordinaryAerial) || p.state === 'airdodge' || p.state === 'dodge') return;
+    if (ground && Math.abs(input.moveX) > 0.15) p.facing = input.moveX > 0 ? 1 : -1;
+    const speed = (m.dashTimer > 0 ? 10.4 : 6.2) * w.loadout.speed * this.upgradeMovementScale();
+    const sliding = p.state === 'wavedash';
+    const targetX = input.moveX * speed;
+    if (!sliding) p.vx = approach(p.vx, targetX, dt * (ground ? 46 : 17));
+    else if (Math.abs(input.moveX) > 0.1 && Math.sign(input.moveX) !== Math.sign(p.vx)) p.vx = approach(p.vx, targetX, dt * 24);
+    p.vz = approach(p.vz, input.moveZ * 4.4 * w.loadout.speed * this.upgradeMovementScale(), dt * (ground ? 35 : 14));
+    if (!sliding && !ordinaryAerial) p.state = !ground ? p.vy > 0 ? 'jump' : 'fall' : Math.hypot(p.vx, p.vz) > 0.4 ? 'run' : 'idle';
+    if (!ground && input.moveZ > 0.65 && p.vy < 0) p.vy = Math.max(-22, p.vy - dt * 55);
+  }
+
+  private direction(input: Pick<InputFrame, 'moveX' | 'moveZ' | 'aimX' | 'aimZ'>, facing: number): AttackDirection {
+    const x = input.aimX ?? input.moveX, z = input.aimZ ?? input.moveZ;
+    if (Math.abs(z) > 0.5 && Math.abs(z) >= Math.abs(x) * 0.8) return z < 0 ? 'up' : 'down';
+    if (Math.abs(x) > 0.3) return Math.sign(x) === facing ? 'forward' : 'back';
     return 'neutral';
+  }
+
+  private canUseSpecial(input: Pick<InputFrame, 'moveX' | 'moveZ' | 'aimX' | 'aimZ'>): boolean {
+    return this.direction(input, this.world.player.facing) === 'up'
+      ? !this.memory(this.world.player).recoveryUsed
+      : this.world.specialCooldown <= 0;
   }
 
   private playerAttack(kind: AttackKind, direction: AttackDirection, charge = 0): void {
@@ -457,6 +528,7 @@ export class GameEngine {
   }
 
   private beginMove(actor: Actor, move: MoveDefinition): void {
+    if (actor.kind === 'player') move = upgradeMove(move, this.world.upgrades);
     const m = this.memory(actor);
     actor.state = 'attack'; actor.stateTime = 0;
     m.actionTimer = totalFrames(move) / 60;
@@ -532,6 +604,7 @@ export class GameEngine {
       strike.fired = true;
       const color = actor.kind === 'player' ? this.world.loadout.color : 0xff6b67;
       this.effect(attack.direction === 'down' || strike.radial ? 'shockwave' : 'trail', actor.x + actor.facing * attack.range * 0.4, actor.y + 0.9, actor.z, 0.25, attack.range, color);
+      if (actor.kind === 'player') this.emitUpgradeAttack(actor, strike);
       if (actor.kind === 'boss' && strike.move.id === 'boss.slam') {
         this.effect('shockwave', actor.x, 0.08, actor.z, 0.7, 5, 0xff624e);
         this.world.shake = Math.max(this.world.shake, 0.35);
@@ -552,22 +625,87 @@ export class GameEngine {
       if (multiplier !== null) {
         strike.hit.add(target.id); strike.connected = true;
         const facing = strike.radial ? (target.x >= actor.x ? 1 : -1) : attack.direction === 'back' ? -actor.facing : actor.facing;
-        this.hit(target, actor, strike.damage * multiplier, strike.force * multiplier, strike.growth, strike.angle, facing as 1 | -1, attack.kind);
+        const vault = actor.kind === 'player' && multiplier > 1 && ['jab', 'tilt', 'aerial'].includes(attack.kind) && !['up', 'down'].includes(attack.direction) ? upgradeRank(this.world.upgrades, 'lance-vault') : 0;
+        const landed = this.hit(target, actor, strike.damage * multiplier, vault ? 6 + vault * 2 : strike.force * multiplier, strike.growth, vault ? 1.25 : strike.angle, facing as 1 | -1, attack.kind);
+        if (actor.kind === 'player' && landed) this.applyWeaponUpgrade(actor, target, strike, multiplier > 1);
         if (multiplier > 1) this.effect('text', target.x, target.y + 2.3, target.z, 0.5, 1, 0x79cfff, 'TIP HIT');
       }
     }
     strike.previous = { x: actor.x, y: actor.y, z: actor.z, facing: actor.facing };
   }
 
+  private upgradeMovementScale(): number {
+    return this.memory(this.world.player).upgradeFlow > 0 ? 1 + upgradeRank(this.world.upgrades, 'razor-flow') * .16 : 1;
+  }
+
+  private emitUpgradeAttack(actor: Actor, strike: Strike): void {
+    const w = this.world, quake = upgradeRank(w.upgrades, 'pile-quake'), echo = upgradeRank(w.upgrades, 'arc-echo');
+    if (w.loadout.weapon === 'pile' && quake && strike.move.kind === 'smash' && this.isGrounded(actor)) {
+      this.upgradeBursts.push({ x: actor.x, y: actor.y, z: actor.z, delay: .18, radius: 2.6 + quake * .5, damage: (5 + quake * 3) * w.loadout.power, force: 5 + quake * 2 });
+    }
+    if (w.loadout.weapon === 'arc' && echo && strike.move.kind === 'jab' && strike.move.combo === 2) {
+      const shot: Projectile = { id: `echo-${this.serial++}`, kind: 'bolt', ownerId: actor.id, x: actor.x + actor.facing * .8, y: actor.y + 1, z: actor.z, vx: actor.facing * 12, vy: 0, vz: 0, radius: .3, life: .55, color: w.loadout.color };
+      w.projectiles.push(shot);
+      this.shots.set(shot.id, { originStrike: strike, kind: 'jab', damage: (4 + echo * 3) * w.loadout.power, force: 4, growth: .04, facing: actor.facing, hit: new Set(), pierce: 1 });
+    }
+  }
+
+  private applyWeaponUpgrade(actor: Actor, target: Actor, strike: Strike, tip: boolean): void {
+    const w = this.world, m = this.memory(actor), rank = (id: UpgradeId) => upgradeRank(w.upgrades, id);
+    if (['special', 'enemy', 'throw'].includes(strike.move.kind)) return;
+    if (w.loadout.weapon === 'lance' && tip && rank('lance-capacitor') && !strike.tipRefunded) {
+      strike.tipRefunded = true;
+      w.specialCooldown = Math.max(0, w.specialCooldown - rank('lance-capacitor') * .35);
+      this.effect('text', actor.x, actor.y + 2, actor.z, .6, 1, w.loadout.color, 'TIP CHARGE');
+    }
+    if (w.loadout.weapon === 'arc' && rank('arc-skyhook') && strike.move.kind === 'aerial' && actor.y > .05 && !m.upgradeAirUsed) {
+      m.upgradeAirUsed = true; m.jumps = Math.min(m.jumps, 1); actor.vy = Math.max(actor.vy, 4.5 + rank('arc-skyhook') * 1.5);
+      this.effect('text', actor.x, actor.y + 2, actor.z, .7, 1, w.loadout.color, 'SKY LINK');
+    }
+    if (w.loadout.weapon === 'razor' && rank('razor-flow')) {
+      m.upgradeNormalHits++;
+      if (m.upgradeNormalHits % 3 === 0) { m.upgradeFlow = 2; this.effect('text', actor.x, actor.y + 2, actor.z, .7, 1, w.loadout.color, 'COMBO DRIVE'); }
+    }
+    if (w.loadout.weapon === 'scythe') {
+      if (rank('scythe-pull') && ['jab', 'tilt'].includes(strike.move.kind) && target.armor <= 0 && target.bossPhase !== 'transition') {
+        target.vx = clamp((actor.x - target.x) * (2 + rank('scythe-pull')), -8, 8);
+        target.vz = clamp((actor.z - target.z) * (2 + rank('scythe-pull')), -5, 5);
+        target.vy = Math.min(target.vy, 2);
+      }
+      strike.upgradeTargets ??= new Set(); strike.upgradeTargets.add(target.id);
+      if (rank('scythe-chain') && strike.upgradeTargets.size >= 2 && !strike.upgradeTriggered) {
+        strike.upgradeTriggered = true;
+        this.upgradeBursts.push({ x: actor.x, y: actor.y, z: actor.z, delay: .18, radius: 3 + rank('scythe-chain') * .4, damage: (4 + rank('scythe-chain') * 3) * w.loadout.power, force: 7 + rank('scythe-chain') * 2 });
+      }
+    }
+  }
+
+  private updateUpgradeBursts(dt: number): void {
+    const w = this.world;
+    if (!w.player.alive || w.phase !== 'playing') { this.upgradeBursts = []; return; }
+    for (const burst of this.upgradeBursts) {
+      burst.delay -= dt;
+      if (burst.delay > 0) continue;
+      this.effect('shockwave', burst.x, burst.y + .15, burst.z, .45, burst.radius * 2, w.loadout.color);
+      const origin = { ...w.player, x: burst.x, y: burst.y, z: burst.z };
+      for (const enemy of w.enemies) if (enemy.alive && enemy.invulnerable <= 0 && Math.abs(enemy.y - burst.y) < 1.6 && Math.hypot(enemy.x - burst.x, enemy.z - burst.z) < burst.radius) {
+        this.hit(enemy, origin, burst.damage, burst.force, .06, .6, enemy.x >= burst.x ? 1 : -1, 'smash');
+      }
+    }
+    this.upgradeBursts = this.upgradeBursts.filter((burst) => burst.delay > 0).slice(-16);
+  }
+
   private special(input: InputFrame): void {
     const w = this.world, p = w.player, m = this.memory(p);
     const direction = this.direction(input, p.facing);
-    if (direction === 'up' && p.y > 0.05 && m.recoveryUsed) return;
-    if (Math.abs(input.moveX) > 0.3) p.facing = input.moveX > 0 ? 1 : -1;
+    if (!this.canUseSpecial(input)) return;
+    const aimX = input.aimX ?? input.moveX;
+    if (Math.abs(aimX) > 0.3) p.facing = aimX > 0 ? 1 : -1;
     const move = specialMove(w.loadout, direction);
-    w.specialCooldown = (w.loadout.special === 'vortex' ? 2.6 : 1.45) * (w.loadout.trait === 'overclocked' ? 0.65 : 1);
+    if (direction !== 'up') w.specialCooldown = (w.loadout.special === 'vortex' ? 2.6 : 1.45) * (w.loadout.trait === 'overclocked' ? 0.65 : 1);
     if (direction === 'up') {
-      m.recoveryUsed = true; p.vy = 14.5; p.vx = input.moveX * 5; m.jumps = Math.max(m.jumps, 1);
+      m.recoveryUsed = true; w.recoveryAvailable = false;
+      p.vy = 14.5; p.vx = input.moveX * 5; m.jumps = Math.max(m.jumps, 1);
     } else if (direction === 'down') p.vy = p.y > 0.2 ? -14 : p.vy;
     else if (move.behavior === 'phase') {
       const cross = direction === 'neutral' ? w.loadout.modules.neutral === 'focused' : w.loadout.modules.side === 'cross';
@@ -636,6 +774,29 @@ export class GameEngine {
     target.stateTime += dt;
   }
 
+  private enemyCombatProfile(enemy: Actor) {
+    const boss = enemy.kind === 'boss' || enemy.kind === 'warden';
+    const ranged = ['gunner', 'artillery', 'captain', 'sniper', 'sapper'].includes(enemy.kind);
+    const mounted = enemy.kind === 'rider' && enemy.mount > 0;
+    const rush = enemy.kind === 'charger' || enemy.kind === 'drone' || mounted;
+    const reach = boss ? 3.4 : enemy.kind === 'sniper' ? 12 : enemy.kind === 'sapper' ? 5 : enemy.kind === 'artillery' ? 10 : enemy.kind === 'captain' ? 4.5 : ranged ? 6.8 : rush ? 5.5 : enemy.kind === 'leaper' ? 4.8 : 2;
+    const speed = mounted ? 4.4 : enemy.kind === 'minion' ? 4.1 : enemy.kind === 'artillery' ? 1.6 : enemy.kind === 'bruiser' ? 2 : boss ? 1.65 : enemy.kind === 'sentinel' ? 2.2 : enemy.kind === 'scout' ? 3.8 : 3.1;
+    return { boss, ranged, mounted, rush, reach, speed };
+  }
+
+  /** This same gate feeds arbitration and execution: unavailable roles cannot block ready actors. */
+  private enemyCanAttack(enemy: Actor): boolean {
+    const w = this.world, p = w.player, m = this.memory(enemy);
+    if (!p.alive || !enemy.alive || enemy.bossPhase === 'transition' || enemy.invulnerable > 0
+      || !['idle', 'run', 'jump', 'fall'].includes(enemy.state) || m.cooldown > 0 || m.actionTimer > 0 || m.forced > 0
+      || !this.onPlatform(enemy) || enemy.y < 0) return false;
+    const { boss, ranged, reach } = this.enemyCombatProfile(enemy);
+    const dx = p.x - enemy.x, dz = p.z - enemy.z;
+    return boss || (Math.abs(dx) <= reach + 0.3
+      && Math.abs(dz) < (['artillery', 'sniper', 'sapper'].includes(enemy.kind) ? 7 : ranged ? 1.8 : 1.15)
+      && (ranged || Math.abs(p.y - enemy.y) < 2.6));
+  }
+
   private updateEnemy(enemy: Actor, dt: number): void {
     const w = this.world, p = w.player;
     if (!enemy.alive) return;
@@ -661,7 +822,7 @@ export class GameEngine {
     if (!p.alive || enemy.state === 'attack') return;
     enemy.telegraph = 0;
     enemy.aim = null;
-    const dx = p.x - enemy.x, dz = p.z - enemy.z;
+    const dx = p.x - enemy.x;
     if (enemy.kind === 'drone' && m.forced <= 0 && this.onPlatform(enemy)) {
       enemy.y += (1.5 + Math.sin(w.time * 2.7 + m.spawnTime) * 0.18 - enemy.y) * Math.min(1, dt * 8);
       enemy.vy = 0;
@@ -673,12 +834,7 @@ export class GameEngine {
       return;
     }
     enemy.facing = dx >= 0 ? 1 : -1;
-    const boss = enemy.kind === 'boss' || enemy.kind === 'warden';
-    const ranged = ['gunner', 'artillery', 'captain', 'sniper', 'sapper'].includes(enemy.kind);
-    const mounted = enemy.kind === 'rider' && enemy.mount > 0;
-    const rush = enemy.kind === 'charger' || enemy.kind === 'drone' || mounted;
-    const reach = boss ? 3.4 : enemy.kind === 'sniper' ? 12 : enemy.kind === 'sapper' ? 5 : enemy.kind === 'artillery' ? 10 : enemy.kind === 'captain' ? 4.5 : ranged ? 6.8 : rush ? 5.5 : enemy.kind === 'leaper' ? 4.8 : 2;
-    const speed = mounted ? 4.4 : enemy.kind === 'minion' ? 4.1 : enemy.kind === 'artillery' ? 1.6 : enemy.kind === 'bruiser' ? 2 : boss ? 1.65 : enemy.kind === 'sentinel' ? 2.2 : enemy.kind === 'scout' ? 3.8 : 3.1;
+    const { boss, ranged, mounted, reach, speed } = this.enemyCombatProfile(enemy);
     const plan = this.director.plan(enemy, w);
     enemy.tactic = plan.action;
     const slot = w.enemies.indexOf(enemy);
@@ -720,8 +876,7 @@ export class GameEngine {
     enemy.vz = approach(enemy.vz, clamp(targetVZ, -speed, speed), dt * 12);
     enemy.state = Math.hypot(enemy.vx, enemy.vz) > 0.3 ? 'run' : 'idle';
     // The shared director reserves the whole telegraph, action, projectile and recovery window.
-    const canReach = boss || (Math.abs(dx) <= reach + 0.3 && Math.abs(dz) < (['artillery', 'sniper', 'sapper'].includes(enemy.kind) ? 7 : ranged ? 1.8 : 1.15));
-    if (!canReach || m.cooldown > 0 || !this.director.reserve(enemy, w, 7)) return;
+    if (!this.enemyCanAttack(enemy) || !this.director.reserve(enemy, w, 7)) return;
     enemy.tactic = 'COMMITTED';
     enemy.vx = 0; enemy.vz = 0;
     m.pattern++;
@@ -778,12 +933,13 @@ export class GameEngine {
 
   private updateHazards(dt: number): void {
     const w = this.world, p = w.player;
-    w.hazards = w.hazards.filter(h => w.enemies.some(e => e.id === h.ownerId && e.alive));
+    w.hazards = w.hazards.filter(h => w.enemies.some(e => e.id === h.ownerId && e.alive) || w.props.some(prop => prop.id === h.ownerId && prop.kind === 'node' && prop.alive));
     for (const zone of w.hazards) {
       zone.elapsed += dt;
       if (zone.hit || zone.elapsed < zone.delay || zone.elapsed >= zone.delay + zone.duration) continue;
       if (!p.alive || p.invulnerable > 0 || p.y < 0 || p.y >= zone.height || !insideHazard(zone, p.x, p.z)) continue;
-      const owner = w.enemies.find(e => e.id === zone.ownerId)!;
+      const node = w.props.find(prop => prop.id === zone.ownerId && prop.alive);
+      const owner = w.enemies.find(e => e.id === zone.ownerId) ?? { ...p, id: zone.ownerId, kind: 'artillery' as const, x: node?.x ?? zone.x, z: node?.z ?? zone.z };
       this.hit(p, owner, zone.damage, zone.force, 0.055, 0.8, p.x > owner.x ? 1 : -1, 'enemy');
       // Intersecting arms of one cross/salvo cannot stack damage on one fighter.
       for (const sibling of w.hazards) if (sibling.group === zone.group) sibling.hit = true;
@@ -796,13 +952,16 @@ export class GameEngine {
     if (actor.kind === 'player' && strike.move.behavior === 'cannon') {
       const facing = actor.attack!.direction === 'back' ? -actor.facing : actor.facing;
       const speed = 14, charged = actor.attack!.kind === 'smash';
+      const split = charged ? upgradeRank(w.upgrades, 'cannon-split') : 0;
+      for (const angle of split ? [-.27, 0, .27] : [0]) {
       const shot: Projectile = { id: `shot-${this.serial++}`, kind: 'bolt', ownerId: actor.id,
         x: actor.x + facing * 0.7, y: actor.y + 1, z: actor.z,
-        vx: facing * speed, vy: 0, vz: 0, radius: charged ? 0.38 : 0.22,
+        vx: facing * speed * Math.cos(angle), vy: 0, vz: speed * Math.sin(angle), radius: charged ? 0.38 : 0.22,
         life: actor.attack!.range / speed, color: w.loadout.color };
       w.projectiles.push(shot);
-      this.shots.set(shot.id, { originStrike: strike, kind: actor.attack!.kind, damage: strike.damage, force: strike.force, growth: strike.growth, facing: facing as 1 | -1 });
+      this.shots.set(shot.id, { originStrike: strike, kind: actor.attack!.kind, damage: strike.damage * (split ? split === 1 ? .6 : .75 : 1), force: strike.force, growth: strike.growth, facing: facing as 1 | -1, hit: new Set(), pierce: 1 + upgradeRank(w.upgrades, 'cannon-pierce'), bounces: upgradeRank(w.upgrades, 'cannon-bounce') });
       this.effect('hit', shot.x, shot.y, shot.z, 0.18, charged ? 1 : 0.5, w.loadout.color);
+      }
       return;
     }
     const target = actor.kind === 'player' ? w.enemies.filter((e) => e.alive && (e.x - actor.x) * actor.facing > 0).sort((a, b) => Math.abs(a.z - actor.z) - Math.abs(b.z - actor.z))[0] : actor.aim;
@@ -878,7 +1037,17 @@ export class GameEngine {
           if (data) {
             // A late projectile can confirm only the exact swing that fired it.
             if (data.originStrike && source.state === 'attack' && this.memory(source).strike === data.originStrike) data.originStrike.connected = true;
-            this.hit(target, source, data.damage, data.force, data.growth, 0.45, data.facing, data.kind, shot); data.hit?.add(target.id); data.pierce = (data.pierce ?? 1) - 1; if (data.pierce <= 0) shot.life = 0; }
+            this.hit(target, source, data.damage, data.force, data.growth, 0.45, data.facing, data.kind, shot); data.hit?.add(target.id); data.pierce = (data.pierce ?? 1) - 1;
+            const bounceTarget = (data.bounces ?? 0) > 0 ? targets.filter((other) => other.alive && other.invulnerable <= 0 && !data.hit?.has(other.id) && Math.hypot(other.x - shot.x, other.z - shot.z) < 6).sort((a, b) => Math.hypot(a.x - shot.x, a.z - shot.z) - Math.hypot(b.x - shot.x, b.z - shot.z))[0] : undefined;
+            if (bounceTarget) {
+              const dx = bounceTarget.x - shot.x, dz = bounceTarget.z - shot.z, distance = Math.hypot(dx, dz) || 1;
+              data.bounces = (data.bounces ?? 0) - 1; data.pierce = Math.max(1, data.pierce); data.facing = dx >= 0 ? 1 : -1;
+              shot.vx = dx / distance * 14; shot.vz = dz / distance * 14; shot.vy = clamp((bounceTarget.y + .9 - shot.y) / distance * 14, -4, 4);
+              shot.life = Math.min(1.2, shot.life + .3);
+              this.effect('hit', shot.x, shot.y, shot.z, .2, .8, shot.color);
+              break;
+            }
+            if (data.pierce <= 0) shot.life = 0; }
           else shot.life = 0;
         }
       }
@@ -889,8 +1058,10 @@ export class GameEngine {
     });
   }
 
-  private hit(target: Actor, source: Actor, damage: number, force: number, growth: number, angle: number, facing: 1 | -1, kind: AttackKind, projectile?: Pick<Projectile, 'vx'>): void {
-    if (!target.alive || target.invulnerable > 0) return;
+  /** True only for an unblocked body hit; shield chip must not grant on-hit upgrades. */
+  private hit(target: Actor, source: Actor, damage: number, force: number, growth: number, angle: number, facing: 1 | -1, kind: AttackKind, projectile?: Pick<Projectile, 'vx'>): boolean {
+    if (!target.alive || target.invulnerable > 0) return false;
+    if (target.kind === 'player') this.actions.reset();
     const w = this.world, m = this.memory(target);
     if (m.grabTarget) this.releaseGrab(target);
     const guarding = target.kind === 'sentinel' && target.guard > 0 && target.state !== 'attack' && target.state !== 'hurt' && target.state !== 'grabbed';
@@ -915,7 +1086,7 @@ export class GameEngine {
         this.effect('text', target.x, target.y + 2, target.z, 0.6, 1, 0x6bbfff, 'BLOCK');
         w.events.push({ type: 'hit', intensity: 0.2 });
         w.hitstop = Math.max(w.hitstop, 0.03);
-        return;
+        return false;
       }
       this.effect('text', target.x, target.y + 2, target.z, 1.1, 1, 0x6bbfff, 'GUARD BREAK');
       this.effect('shockwave', target.x, target.y + 1, target.z, 0.5, 2.5, 0x6bbfff);
@@ -969,6 +1140,7 @@ export class GameEngine {
       w.combo = 0;
       if (m.grabTarget) this.releaseGrab(target);
     }
+    return true;
   }
 
   private damageProp(prop: ArenaProp, damage: number, owner: Actor): void {
@@ -978,6 +1150,11 @@ export class GameEngine {
     this.effect('hit', prop.x, prop.height * 0.7, prop.z, 0.25, 0.8, prop.kind === 'crate' ? 0x65f0b1 : 0xffaa55);
     if (prop.hp > 0) return;
     prop.alive = false;
+    if (prop.kind === 'relay' || prop.kind === 'node') {
+      this.world.pendingSpawns = this.world.pendingSpawns.filter((spawn) => spawn.sourceId !== prop.id);
+      this.world.hazards = this.world.hazards.filter((hazard) => hazard.ownerId !== prop.id);
+      this.effect('text', prop.x, prop.height + .5, prop.z, 1.4, 1, 0x65f0b1, prop.kind === 'relay' ? 'REINFORCEMENTS OFFLINE' : prop.id.endsWith('-0') ? 'ARTILLERY OFFLINE' : 'VENTS OFFLINE');
+    }
     if (prop.kind === 'crate') {
       this.world.props.push({ ...prop, id: `${prop.id}-repair`, kind: 'repair', alive: true, height: 0.5, width: 0.7, depth: 0.7 });
       this.effect('text', prop.x, 1.8, prop.z, 1.1, 1, 0x65f0b1, 'REPAIR +25');
@@ -1007,7 +1184,8 @@ export class GameEngine {
       if (!prop.alive) continue;
       if (prop.kind === 'vent') {
         prop.timer = (prop.timer + dt) % 6;
-        prop.phase = w.mode === 'training' || w.phase !== 'playing' ? 'idle' : prop.timer < 3.8 ? 'idle' : prop.timer < 5 ? 'warning' : 'active';
+        const ventControl = w.props.find((entry) => entry.kind === 'node' && entry.id.endsWith('-1'));
+        prop.phase = w.mode === 'training' || w.phase !== 'playing' || ventControl && !ventControl.alive ? 'idle' : prop.timer < 3.8 ? 'idle' : prop.timer < 5 ? 'warning' : 'active';
       }
       if (prop.kind === 'repair') {
         const p = w.player;
@@ -1112,6 +1290,7 @@ export class GameEngine {
     w.events.push({ type: 'ko', intensity: actor.kind === 'boss' ? 1 : 0.7 });
     w.shake = Math.max(w.shake, actor.kind === 'boss' ? 1 : 0.45);
     if (actor.kind === 'player') {
+      this.actions.reset(); w.recoveryAvailable = false;
       w.stocks--;
       w.combo = 0;
       m.respawnTimer = 1.15;
@@ -1151,7 +1330,52 @@ export class GameEngine {
     p.vx = 0; p.vy = 0; p.vz = 0; p.damage = 0;
     p.invulnerable = 3; p.state = 'fall'; p.stateTime = 0; p.attack = null;
     this.resetMemory(p);
+    this.actions.reset(); w.recoveryAvailable = true;
     this.effect('spawn', p.x, 0.03, p.z, 1, 2.5, w.loadout.color);
+  }
+
+  private spawnEnemy(kind: ActorKind, x: number, z: number): void {
+    const w = this.world, enemy = this.makeActor(kind, x, z);
+    this.memory(enemy).spawnTime = w.time;
+    enemy.invulnerable = .65;
+    w.enemies.push(enemy);
+    this.effect('spawn', x, 0, z, .8, enemy.scale * 1.4, kind === 'boss' ? 0xff6e55 : 0xffb35c);
+    if (kind === 'captain') {
+      for (const side of [-1, 1]) {
+        if (w.enemies.filter((actor) => actor.alive).length >= 14) break;
+        const minion = this.makeActor('minion', clamp(x - 1.4, w.arenaMin + 1, w.arenaMax - 1), clamp(z + side * 1.2, -3.4, 3.4));
+        minion.leaderId = enemy.id; minion.invulnerable = .9;
+        w.enemies.push(minion);
+        this.effect('spawn', minion.x, 0, minion.z, .8, .8, 0xc9ed6a);
+      }
+    }
+    if (kind === 'boss' || kind === 'warden') {
+      w.message = kind === 'boss' ? 'WARNING // THE ARCHITECT' : 'MIDBOSS // THE WARDEN'; w.messageTime = 4;
+      w.events.push({ type: 'boss' });
+    }
+  }
+
+  private queueSpawn(kind: ActorKind, x: number, z: number, delay: number, source: SpawnWarning['source'], sourceId?: string): void {
+    const w = this.world;
+    if (w.pendingSpawns.length + w.enemies.filter((enemy) => enemy.alive).length >= 14 && source !== 'wave') return;
+    w.pendingSpawns.push({ id: `arrival-${this.serial++}`, kind, x: clamp(x, w.arenaMin + 1.5, w.arenaMax - 1.5), z: clamp(z, -3.2, 3.2), remaining: delay, duration: 1.1, source, ...(sourceId ? { sourceId } : {}) });
+  }
+
+  private updatePendingSpawns(dt: number): void {
+    const w = this.world;
+    if (w.phase !== 'playing' || w.mode === 'training') return;
+    w.pendingSpawns = w.pendingSpawns.filter((spawn) => !spawn.sourceId || w.props.some((prop) => prop.id === spawn.sourceId && prop.alive));
+    const remaining: SpawnWarning[] = [];
+    for (const spawn of w.pendingSpawns) {
+      spawn.remaining -= dt;
+      if (spawn.remaining > 0) { remaining.push(spawn); continue; }
+      if (w.enemies.filter((enemy) => enemy.alive).length >= 14) {
+        if (spawn.source === 'wave') { spawn.remaining = .2; remaining.push(spawn); }
+        continue;
+      }
+      this.spawnEnemy(spawn.kind, spawn.x, spawn.z);
+    }
+    w.pendingSpawns = remaining;
   }
 
   private spawnWave(): void {
@@ -1159,27 +1383,18 @@ export class GameEngine {
     w.waveTimer = 0;
     this.director.reset(); w.coordination = emptyCoordination();
     const kinds = w.mode === 'training' ? TRAINING_WAVES[(w.wave - 1) % TRAINING_WAVES.length]! : STAGES[w.sector]!.waves[w.wave - 1]!.enemies;
+    const staged = w.mode === 'campaign' && kinds.length >= 6;
     for (let index = 0; index < kinds.length; index++) {
       const kind = kinds[index]!;
-      const x = w.sector * SECTOR_SPAN + (kind === 'boss' || kind === 'warden' ? 5 : 1.5 + Math.floor(index / 4) * 2.6);
-      const z = kind === 'boss' ? 0 : [-2.7, 2.7, -0.9, 0.9][index % 4]!;
-      const enemy = this.makeActor(kind, x, z);
-      this.memory(enemy).spawnTime = w.time + index;
-      enemy.invulnerable = 0.6 + index * 0.1;
-      w.enemies.push(enemy);
-      this.effect('spawn', x, 0, z, 0.8, enemy.scale * 1.4, kind === 'boss' ? 0xff6e55 : 0xffb35c);
-      if (kind === 'captain') {
-        for (const side of [-1, 1]) {
-          const minion = this.makeActor('minion', clamp(x - 1.4, w.arenaMin + 1, w.arenaMax - 1), clamp(z + side * 1.2, -3.4, 3.4));
-          minion.leaderId = enemy.id; minion.invulnerable = 0.9;
-          w.enemies.push(minion);
-          this.effect('spawn', minion.x, 0, minion.z, 0.8, 0.8, 0xc9ed6a);
-        }
-      }
-      if (kind === 'boss' || kind === 'warden') {
-        w.message = kind === 'boss' ? 'WARNING // THE ARCHITECT' : 'MIDBOSS // THE WARDEN'; w.messageTime = 4;
-        w.events.push({ type: 'boss' });
-      }
+      const batch = Math.floor(index / 4), side = batch % 2 ? -1 : 1;
+      const x = w.sector * SECTOR_SPAN + (kind === 'boss' || kind === 'warden' ? 5 : staged && batch > 0 ? side * (8 + index % 2) : 1.5 + Math.floor(index / 4) * 2.6);
+      const z = kind === 'boss' ? 0 : [-2.7, 2.7, -.9, .9][index % 4]!;
+      if (staged && batch > 0) this.queueSpawn(kind, x, z, 2 + batch * 1.5, 'wave');
+      else this.spawnEnemy(kind, x, z);
+    }
+    if (w.objective.kind === 'lockdown' && w.wave === STAGES[w.sector]!.waves.length && !w.objective.activated) {
+      w.objective.activated = true; w.objective.elapsed = 0; w.objective.progress = 0;
+      w.message = 'LOCKDOWN // 18秒生存で離脱。全滅させなくても突破可能'; w.messageTime = 4;
     }
     if (w.mode !== 'training') w.events.push({ type: 'wave' });
   }
@@ -1187,20 +1402,59 @@ export class GameEngine {
   private updateObjective(dt: number): void {
     const w = this.world, o = w.objective;
     if (w.mode === 'training' || w.phase !== 'playing' || o.complete) return;
-    if (o.kind === 'relay' || o.kind === 'nodes') o.progress = w.props.filter(p => p.id.startsWith('objective-') && !p.alive).length;
-    else if (o.kind === 'lockdown' && w.player.alive) {
+    if (o.kind === 'relay' || o.kind === 'nodes') {
+      o.progress = w.props.filter((prop) => prop.id.startsWith('objective-') && !prop.alive).length;
+      if (o.kind === 'relay' && w.player.alive) {
+        o.elapsed += dt;
+        const due = Math.min(3, Math.floor(o.elapsed / 8));
+        for (const index of [0, 1] as const) {
+          const relay = w.props.find((prop) => prop.id === `objective-${w.sector}-${index}`);
+          while (o.relayPulses[index] < due) {
+            o.relayPulses[index]++;
+            if (relay?.alive) {
+              this.queueSpawn('minion', relay.x, relay.z, 1.1, 'relay', relay.id);
+              o.reinforcements++;
+            }
+          }
+        }
+      }
+      if (o.kind === 'nodes') {
+        const artillery = w.props.find((prop) => prop.id === `objective-${w.sector}-0` && prop.alive);
+        o.hazardTimer += dt;
+        if (artillery && o.hazardTimer >= 6 && w.player.alive) {
+          o.hazardTimer = 0;
+          w.hazards.push({ id: `node-shot-${this.serial++}`, group: `node-salvo-${this.serial++}`, ownerId: artillery.id, pattern: 'snipe', x: w.sector * SECTOR_SPAN, z: clamp(w.player.z, -3, 3), width: w.arenaMax - w.arenaMin, depth: 1.2, elapsed: 0, delay: 1.5, duration: .35, height: 3.5, damage: 10, force: 6, hit: false });
+        }
+      }
+    } else if (o.kind === 'lockdown' && o.activated && w.player.alive) {
       o.elapsed += dt; o.progress = Math.min(o.target, o.elapsed);
       const pulses = Math.min(2, Math.floor(o.elapsed / 6));
       while (o.reinforcements < pulses) {
         o.reinforcements++;
-        for (const sign of [-1, 1]) if (w.enemies.filter(e => e.alive).length < 14) {
-          const e = this.makeActor('minion', w.sector * SECTOR_SPAN + sign * 8, sign * 2.5); e.invulnerable = .8; w.enemies.push(e);
-          this.effect('spawn', e.x, 0, e.z, .8, 1, 0xffdd75);
-        }
+        for (const sign of [-1, 1]) this.queueSpawn('minion', w.sector * SECTOR_SPAN + sign * 8, sign * 2.5, 1.1, 'lockdown');
       }
     }
-    o.complete = o.progress >= o.target;
-    if (o.complete && !o.rewarded) { o.rewarded = true; w.score += 250; w.message = 'OBJECTIVE COMPLETE // GATE ENABLED'; w.messageTime = 3; }
+    o.complete = o.activated && o.progress >= o.target;
+    if (o.complete && !o.rewarded) {
+      o.rewarded = true; w.score += 250;
+      w.message = 'OBJECTIVE COMPLETE // 残りの迎撃部隊を突破'; w.messageTime = 3;
+      if (o.kind === 'lockdown') this.clearSector();
+    }
+  }
+
+  private clearSector(): void {
+    const w = this.world;
+    if (this.sectorCleared || w.sector >= STAGES.length - 1) return;
+    w.completedSectors = w.sector + 1;
+    w.phase = 'sector-clear'; this.sectorCleared = true;
+    w.message = 'SECTOR CLEAR // 強化を選び、補給して次へ'; w.messageTime = 99;
+    w.player.damage = Math.max(0, w.player.damage - 10);
+    w.score += 600;
+    w.projectiles = []; w.hazards = []; w.pendingSpawns = []; this.upgradeBursts = [];
+    for (const enemy of w.enemies) this.memories.delete(enemy.id);
+    w.enemies = []; this.shots.clear();
+    w.upgradeChoices = createUpgradeChoices(w.seed, w.sector, w.loadout, w.upgrades);
+    w.upgradeClaimed = w.upgradeChoices.length === 0;
   }
 
   private completeWave(): void {
@@ -1213,15 +1467,7 @@ export class GameEngine {
       w.wave++;
       w.message = `WAVE ${w.wave} // ${STAGES[w.sector]!.waves[w.wave - 1]!.name}`; w.messageTime = 2.5;
       this.spawnWave();
-    } else if (w.sector < STAGES.length - 1 && w.objective.complete) {
-      w.completedSectors = w.sector + 1;
-      w.phase = 'sector-clear'; this.sectorCleared = true;
-      w.message = 'SECTOR CLEAR // 補給を選び、次の戦場へ'; w.messageTime = 99;
-      w.player.damage = Math.max(0, w.player.damage - 10);
-      w.score += 600;
-      w.projectiles = []; w.hazards = [];
-      this.shots.clear();
-    }
+    } else if (w.sector < STAGES.length - 1 && w.objective.complete) this.clearSector();
   }
 
   private effect(type: Effect['type'], x: number, y: number, z: number, duration: number, size: number, color: number, text?: string): void {

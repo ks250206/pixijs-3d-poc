@@ -161,16 +161,16 @@ test('graphics controls apply while paused and persist across reloads', async ({
   expect((await snapshot(page)).phase).toBe('paused');
 });
 
-test('cleared-stage supplies apply once and route departure enters the next stage', async ({ page }) => {
+test('stage-clear upgrades and supplies apply once before departure, including the mobile reward layout', async ({ page }) => {
   await boot(page);
   await page.locator('[data-action=start]').click();
   await page.evaluate(() => {
     const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; update: GameEngine['update'] } } }).__UPRISING__.engine;
-    for (let wave = 0; wave < 3; wave++) {
+    // Isolate the reward UI while allowing every staged arrival and objective to resolve.
+    // Ordinary-input, all-sector completion is covered separately by the mechanics suite.
+    engine.world.player.invulnerable = 100;
+    for (let i = 0; i < 3600 && engine.world.phase === 'playing'; i++) {
       engine.world.enemies.forEach((enemy) => { enemy.x = engine.world.arenaMax + 6; });
-      for (let i = 0; i < 100; i++) engine.update(1 / 60);
-    }
-    for (let i = 0; i < 1500 && engine.world.phase === 'playing'; i++) {
       const p = engine.world.player, target = engine.world.props.find(prop => prop.alive && prop.id.startsWith('objective-'));
       const input = { moveX: 0, moveZ: 0, attack: false, attackHeld: false, smash: false, smashHeld: false, special: false, jump: false, jumpHeld: false, dodge: false, dodgeHeld: false, grab: false, dash: false, pause: false, flickX: 0, flickZ: 0 };
       if (target) {
@@ -180,12 +180,27 @@ test('cleared-stage supplies apply once and route departure enters the next stag
       }
       engine.update(1 / 60, input);
     }
+    engine.world.player.damage = 0;
+    engine.world.stocks = 4;
   });
-  await expect.poll(async () => (await snapshot(page)).phase).toBe('sector-clear');
-  const power = (await snapshot(page)).loadout.power;
-  await page.locator('[data-hud=sectorClear] [data-action=map]').click();
-  await page.locator('[data-supply=power]').click();
+  await expect(page.getByRole('dialog', { name: 'REBELLION ROUTE' })).toBeVisible();
+  expect((await snapshot(page)).phase).toBe('paused');
+  await expect(page.locator('[data-upgrade]')).toHaveCount(3);
+  await expect(page.locator('[data-action=travel]')).toBeDisabled();
+  await expect(page.locator('[data-supply=repair]')).toBeDisabled();
   await expect(page.locator('[data-supply=stock]')).toBeDisabled();
+  await expect(page.locator('[data-upgrade]').first()).toBeFocused();
+  const power = (await snapshot(page)).loadout.power;
+  await page.screenshot({ path: 'test-results/screenshots/upgrade-choices.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.getByRole('dialog').evaluate((element) => element.scrollWidth <= element.clientWidth + 2)).toBe(true);
+  await page.screenshot({ path: 'test-results/screenshots/upgrade-mobile.png' });
+  await page.locator('[data-upgrade]').first().click();
+  await expect(page.locator('[data-upgrade][aria-pressed=true]')).toHaveCount(1);
+  expect((await snapshot(page)).upgrades).toHaveLength(1);
+  await expect(page.locator('[data-action=travel]')).toBeEnabled();
+  await page.locator('[data-supply=power]').click();
+  await expect(page.locator('[data-supply=power]')).toBeDisabled();
   expect((await snapshot(page)).loadout.power).toBeCloseTo(power + 0.08);
   await page.locator('[data-action=travel]').click();
   await expect.poll(async () => (await snapshot(page)).sector).toBe(1);
@@ -253,7 +268,7 @@ test('selects and plays each new fighting style with its own attack', async ({ p
   expect(errors).toEqual([]);
 });
 
-test('renders boss floor warnings even with reduced graphics', async ({ page }) => {
+test('renders boss warnings and occluded player guides even with reduced graphics', async ({ page }) => {
   if (!process.env.CI) await page.setViewportSize({ width: 1120, height: 700 });
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -264,9 +279,9 @@ test('renders boss floor warnings even with reduced graphics', async ({ page }) 
     engine.world.mode = 'campaign';
     for (let sector = 0; sector < 6; sector++) { engine.world.phase = 'sector-clear'; engine.nextSector(); }
     engine.world.player.invulnerable = 100;
-    for (let wave = 0; wave < 3; wave++) {
+    for (let i = 0; i < 3600 && !engine.world.enemies.some(e => e.kind === 'boss'); i++) {
       engine.world.enemies.forEach(e => { e.x = engine.world.arenaMax + 6; });
-      for (let i = 0; i < 100; i++) engine.update(1 / 60);
+      engine.update(1 / 60);
     }
     engine.world.player.x = (engine.world.arenaMin + engine.world.arenaMax) / 2 - 2;
     for (let i = 0; i < 240 && !engine.world.hazards.length; i++) engine.update(1 / 60);
@@ -285,6 +300,26 @@ test('renders boss floor warnings even with reduced graphics', async ({ page }) 
   expect((await snapshot(page)).hazards.length).toBeGreaterThan(0);
   await expectRenderedArena(page);
   await page.screenshot({ path: 'test-results/screenshots/boss-warning-low.png' });
+  const guides = await page.evaluate(() => {
+    const { engine, scene } = (window as unknown as { __UPRISING__: { engine: GameEngine; scene: GameScene } }).__UPRISING__;
+    const boss = engine.world.enemies.find(e => e.kind === 'boss')!;
+    const center = (engine.world.arenaMin + engine.world.arenaMax) / 2;
+    engine.world.enemies = [boss]; engine.world.props = []; engine.world.hazards = [];
+    Object.assign(engine.world.player, { x: center, y: 0, z: 0, invulnerable: 0 });
+    Object.assign(boss, { x: center + .1, y: 0, z: 0, invulnerable: 0 });
+    scene.update(engine.world, 0);
+    return scene.getReadability();
+  });
+  expect(guides.playerOccluded).toBe(true);
+  expect(guides.laneTargets).toBe(1);
+  expect(guides.visibleLabels.every(label => !/REGROUP|SCREEN|FLANK/.test(label))).toBe(true);
+  await expectRenderedArena(page);
+  await page.screenshot({ path: 'test-results/screenshots/player-occluded-low.png' });
+  expect(await page.evaluate(() => {
+    const { engine, scene } = (window as unknown as { __UPRISING__: { engine: GameEngine; scene: GameScene } }).__UPRISING__;
+    engine.world.player.y = 40; scene.update(engine.world, 0);
+    return scene.getReadability().playerOffscreen;
+  })).toBe(true);
   expect(errors).toEqual([]);
 });
 
@@ -341,6 +376,13 @@ test('keyboard movement, jumping, charging, pausing and recovery work in the ren
   expect((await snapshot(page)).time).toBe(pausedTime);
   await page.locator('[data-action=resume]').click();
   await expect.poll(async () => (await snapshot(page)).phase).toBe('playing');
+  await page.locator('.top-actions [data-action=pause]').click();
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('paused');
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await snapshot(page)).phase).toBe('playing');
+  await page.keyboard.down('Space');
+  await expect.poll(async () => (await snapshot(page)).player.y, { intervals: [30, 50, 80] }).toBeGreaterThan(0.15);
+  await page.keyboard.up('Space');
   await page.locator('.top-actions [data-action=help]').click();
   expect((await snapshot(page)).phase).toBe('paused');
   await page.getByRole('button', { name: '操作ガイドを閉じる' }).click();
@@ -436,14 +478,16 @@ test('shows rolled module details, ground dash label, objectives and phase two i
     engine.world.enemies.forEach(e=>e.x=engine.world.arenaMax+6);engine.update(1/60,empty);
     engine.world.hitstop=100;
   },{empty:EMPTY_INPUT});
-  await expect(page.locator('[data-hud=objective]')).toContainText('通信リレーを破壊 0/2');
+  await expect(page.locator('[data-hud=objective]')).toContainText('通信リレー2基を破壊し増援を停止 0/2');
   await page.screenshot({path:'test-results/screenshots/relay-objective.png'});
   await page.evaluate(({empty})=>{
     const {engine}=(window as unknown as {__UPRISING__:{engine:GameEngine}}).__UPRISING__;
     for(let i=0;i<6;i++){engine.world.phase='sector-clear';engine.nextSector();}
-    engine.world.wave=4;engine.world.enemies=[];engine.world.hitstop=0;
-    // Spawn the existing final wave through the normal update path.
-    engine.world.wave=3;for(let i=0;i<100;i++)engine.update(1/60,empty);
+    engine.world.hitstop=0; engine.world.player.invulnerable=100;
+    // Advance all staged arrivals through the real wave path before placing the boss fixture.
+    for(let i=0;i<3600&&!engine.world.enemies.some(e=>e.kind==='boss');i++){
+      engine.world.enemies.forEach(e=>e.x=engine.world.arenaMax+6); engine.update(1/60,empty);
+    }
     const boss=engine.world.enemies.find(e=>e.kind==='boss')!;
     engine.world.props=[];engine.world.mode='training';
     Object.assign(boss,{x:engine.world.arenaMin+10,z:0,armor:1,invulnerable:0});

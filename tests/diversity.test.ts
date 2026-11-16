@@ -69,7 +69,7 @@ describe("cooperative encounter reservations", () => {
     g.world.enemies[0]!.kind = "sentinel";
     g.world.enemies[1]!.kind = "gunner";
     g.world.enemies[2]!.kind = "scout";
-    d.update(g.world, 1 / 60);
+    d.update(g.world, 1 / 60, g.world.enemies);
     const roles = g.world.enemies.map((e) => d.plan(e, g.world));
     expect(new Set(roles.map((r) => r.role)).size).toBe(3);
     const gunner = g.world.enemies[1]!,
@@ -133,7 +133,7 @@ describe("campaign objective state", () => {
 });
 
 describe("integrated coordination and objective gates", () => {
-  it("shows screen/flank actions over time and never overlaps two committed attackers", () => {
+  it("shows screen/flank actions over time and keeps same-lane attacks exclusive", () => {
     const g = lab();
     g.world.mode = "campaign";
     g.world.enemies.forEach((e, i) =>

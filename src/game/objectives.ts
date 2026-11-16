@@ -9,6 +9,9 @@ export interface ObjectiveState {
   elapsed: number;
   reinforcements: number;
   rewarded: boolean;
+  activated: boolean;
+  relayPulses: [number, number];
+  hazardTimer: number;
 }
 export function createObjective(sector: number, mode: GameMode): ObjectiveState {
   const kind =
@@ -25,11 +28,11 @@ export function createObjective(sector: number, mode: GameMode): ObjectiveState 
     kind,
     label:
       kind === "relay"
-        ? "通信リレーを破壊"
+        ? "通信リレー2基を破壊し増援を停止"
         : kind === "nodes"
-          ? "ゲート制御ノードを破壊"
+          ? "砲撃制御A・噴出制御Bを停止"
           : kind === "lockdown"
-            ? "警備ロックダウンを生存"
+            ? "最終波のロックダウンを生存して離脱"
             : "敵の全ウェーブを突破",
     progress: 0,
     target: kind === "lockdown" ? 18 : kind === "clear" ? 0 : 2,
@@ -37,6 +40,9 @@ export function createObjective(sector: number, mode: GameMode): ObjectiveState 
     elapsed: 0,
     reinforcements: 0,
     rewarded: false,
+    activated: kind !== 'lockdown',
+    relayPulses: [0, 0],
+    hazardTimer: 0,
   };
 }
 export function objectiveProps(sector: number, objective: ObjectiveState): ArenaProp[] {
@@ -58,5 +64,6 @@ export function objectiveProps(sector: number, objective: ObjectiveState): Arena
 }
 export function objectiveText(o: ObjectiveState): string {
   if (o.kind === "clear") return o.label;
+  if (o.kind === 'lockdown' && !o.activated) return '最終波で18秒のロックダウン / 現在は迎撃部隊を突破';
   return `${o.complete ? "✓ " : ""}${o.label} ${Math.min(o.target, Math.floor(o.progress))}/${o.target}${o.kind === "lockdown" ? "s" : ""}`;
 }

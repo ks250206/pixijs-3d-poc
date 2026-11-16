@@ -1,4 +1,5 @@
-import { EMPTY_INPUT, type InputFrame } from './types';
+import { EMPTY_INPUT, type ActionPress, type BufferedAction, type InputFrame } from './types';
+import { actionPress, BUFFERED_ACTIONS } from './action-buffer';
 
 type Action = 'left' | 'right' | 'up' | 'down' | 'attack' | 'smash' | 'special' | 'jump' | 'dodge' | 'grab' | 'dash' | 'pause';
 
@@ -18,9 +19,11 @@ export class GameInput {
   private keys = new Set<string>();
   private touch = new Set<Action>();
   private pressed = new Set<Action>();
+  private actionPresses: ActionPress[] = [];
   private previousPad = new Set<Action>();
   private previousPadX = 0;
   private previousPadZ = 0;
+  private previousAim: { x: number; z: number } | null = null;
   private directionTimes = new Map<Action, number>();
   private flickX = 0;
   private flickZ = 0;
@@ -69,6 +72,7 @@ export class GameInput {
   private onPadDisconnect = (): void => {
     this.previousPad.clear();
     this.previousPadX = this.previousPadZ = 0;
+    this.previousAim = null;
     this.dashDirection = 0;
   };
 
@@ -93,6 +97,13 @@ export class GameInput {
 
   private press(action: Action): void {
     this.pressed.add(action);
+    if (BUFFERED_ACTIONS.includes(action as BufferedAction)) {
+      const direction = this.movement(this.previousPadX, this.previousPadZ);
+      this.actionPresses.push(actionPress(action as BufferedAction, {
+        ...direction, aimX: this.previousAim?.x, aimZ: this.previousAim?.z,
+        dash: this.held('dash') || this.dashDirection !== 0,
+      }));
+    }
     const now = performance.now();
     if (action === 'left' || action === 'right') {
       const sign = action === 'left' ? -1 : 1;
@@ -108,33 +119,47 @@ export class GameInput {
     }
   }
 
+  private movement(padX: number, padZ: number): { moveX: number; moveZ: number } {
+    let moveX = clamp(Number(this.held('right')) - Number(this.held('left')) + padX);
+    let moveZ = clamp(Number(this.held('down')) - Number(this.held('up')) + padZ);
+    const length = Math.hypot(moveX, moveZ);
+    if (length > 1) { moveX /= length; moveZ /= length; }
+    return { moveX, moveZ };
+  }
+
+  private heldPadActions(pad: Gamepad | null | undefined): Set<Action> {
+    const actions = new Set<Action>();
+    if (!pad) return actions;
+    const buttons: [Action, number[]][] = [
+      ['jump', [0]], ['special', [1]], ['attack', [2]], ['grab', [3]],
+      ['dodge', [4, 5, 6, 7]], ['pause', [9]],
+    ];
+    for (const [action, indices] of buttons) {
+      if (indices.some((index) => (pad.buttons[index]?.value ?? 0) > 0.35)) actions.add(action);
+    }
+    if (Math.hypot(deadzone(pad.axes[2] ?? 0), deadzone(pad.axes[3] ?? 0)) > 0.5) actions.add('smash');
+    return actions;
+  }
+
   sample(): InputFrame {
     if (document.hidden) return { ...EMPTY_INPUT };
     const now = performance.now();
-    const padActions = new Set<Action>();
     let padX = 0;
     let padZ = 0;
     let smashX = 0;
     let smashZ = 0;
     const pads = navigator.getGamepads?.() ?? [];
     const pad = [...pads].find((entry) => entry?.connected);
+    const padActions = this.heldPadActions(pad);
     if (pad) {
       padX = deadzone(pad.axes[0] ?? 0);
       padZ = deadzone(pad.axes[1] ?? 0);
-      const buttons: [Action, number[]][] = [
-        ['jump', [0]], ['special', [1]], ['attack', [2]], ['grab', [3]],
-        ['dodge', [4, 5, 6, 7]], ['pause', [9]],
-      ];
-      for (const [action, indices] of buttons) {
-        if (indices.some((index) => (pad.buttons[index]?.value ?? 0) > 0.35)) padActions.add(action);
-      }
       if (pad.buttons[14]?.pressed) padX = -1;
       if (pad.buttons[15]?.pressed) padX = 1;
       if (pad.buttons[12]?.pressed) padZ = -1;
       if (pad.buttons[13]?.pressed) padZ = 1;
       smashX = deadzone(pad.axes[2] ?? 0);
       smashZ = deadzone(pad.axes[3] ?? 0);
-      if (Math.hypot(smashX, smashZ) > 0.5) padActions.add('smash');
       if (Math.abs(padX) > 0.65 && (Math.abs(this.previousPadX) < 0.3 || Math.sign(padX) !== Math.sign(this.previousPadX))) {
         this.press(padX < 0 ? 'left' : 'right');
       }
@@ -144,22 +169,19 @@ export class GameInput {
     }
     this.previousPadX = padX;
     this.previousPadZ = padZ;
-    for (const action of padActions) {
-      if (!this.previousPad.has(action)) this.pressed.add(action);
-    }
+    const padPresses = [...padActions].filter(action => !this.previousPad.has(action));
+    for (const action of padPresses) this.pressed.add(action);
     this.previousPad = padActions;
     const isHeld = (action: Action) => this.held(action) || padActions.has(action);
-    let moveX = clamp(Number(this.held('right')) - Number(this.held('left')) + padX);
-    let moveZ = clamp(Number(this.held('down')) - Number(this.held('up')) + padZ);
+    const { moveX, moveZ } = this.movement(padX, padZ);
+    this.previousAim = null;
     if (padActions.has('smash')) {
-      moveX = smashX;
-      moveZ = smashZ;
+      const length = Math.max(1, Math.hypot(smashX, smashZ));
+      this.previousAim = { x: smashX / length, z: smashZ / length };
     }
-    const length = Math.hypot(moveX, moveZ);
-    if (length > 1) { moveX /= length; moveZ /= length; }
     if (Math.abs(moveX) < 0.2 || Math.sign(moveX) !== this.dashDirection) this.dashDirection = 0;
     const frame: InputFrame = {
-      moveX, moveZ,
+      moveX, moveZ, aimX: this.previousAim?.x, aimZ: this.previousAim?.z,
       attack: this.pressed.has('attack'), attackHeld: isHeld('attack'),
       smash: this.pressed.has('smash'), smashHeld: isHeld('smash'),
       special: this.pressed.has('special'), jump: this.pressed.has('jump'), jumpHeld: isHeld('jump'),
@@ -169,6 +191,11 @@ export class GameInput {
       flickX: now < this.flickXUntil ? this.flickX : 0,
       flickZ: now < this.flickZUntil ? this.flickZ : 0,
     };
+    for (const action of padPresses) if (BUFFERED_ACTIONS.includes(action as BufferedAction)) {
+      this.actionPresses.push(actionPress(action as BufferedAction, frame));
+    }
+    frame.presses = this.actionPresses;
+    this.actionPresses = [];
     this.pressed.clear();
     return frame;
   }
@@ -177,8 +204,14 @@ export class GameInput {
     this.keys.clear();
     this.touch.clear();
     this.pressed.clear();
-    this.previousPad.clear();
+    this.actionPresses = [];
+    // A physical button held across a menu is still held, not a fresh press.
+    // Snapshot now so inputs first pressed after resuming remain responsive.
+    const pads = navigator.getGamepads?.() ?? [];
+    this.previousPad = this.heldPadActions([...pads].find((entry) => entry?.connected));
     this.previousPadX = this.previousPadZ = 0;
+    this.previousAim = null;
+    this.directionTimes.clear();
     this.flickXUntil = this.flickZUntil = 0;
     this.dashDirection = 0;
   };
