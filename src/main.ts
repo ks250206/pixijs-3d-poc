@@ -6,6 +6,7 @@ import { createCandidates } from './game/loadouts';
 import { EMPTY_INPUT } from './game/types';
 import type { GameMode, InputFrame, Loadout } from './game/types';
 import { GameScene } from './render/scene';
+import { RogueliteUI } from './ui/roguelite';
 import { GameUI } from './ui/hud';
 
 const params = new URLSearchParams(location.search);
@@ -94,6 +95,8 @@ async function main() {
     setGraphics: (settings) => scene.setGraphics(settings),
   }, candidates);
 
+  const rogueUI = new RogueliteUI(engine, resetInputAndFocus);
+
   const unlock = () => audio.unlock();
   window.addEventListener('pointerdown', unlock, { once: true });
   window.addEventListener('keydown', unlock, { once: true });
@@ -128,7 +131,8 @@ async function main() {
       fpsFrames = 0;
     }
     const sampled = input.sample();
-    pending = mergeInputFrames(pending, sampled);
+    if (engine.run && engine.run.phase !== 'combat') { input.releaseAll(); pending = { ...EMPTY_INPUT }; }
+    pending = engine.run && engine.run.phase !== 'combat' ? { ...EMPTY_INPUT } : mergeInputFrames(pending, sampled);
     accumulated += dt;
     let steps = 0;
     while (accumulated >= 1 / 60 && steps++ < 6) {
@@ -142,6 +146,7 @@ async function main() {
       pending = clearInputEdges(pending);
       accumulated -= 1 / 60;
     }
+    rogueUI.update();
     scene.update(engine.world, dt);
     if (diagnostics && now - lastDiagnosticsTime >= 1000) {
       // Read the app's own framebuffer immediately after rendering, before presentation.
@@ -183,6 +188,7 @@ async function main() {
     input.dispose();
     audio.dispose();
     ui.dispose();
+    rogueUI.dispose();
     diagnostics?.remove();
     scene.destroy();
   }
