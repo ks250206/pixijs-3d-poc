@@ -1,3 +1,4 @@
+import { resolveUnknown, effectiveNode, eventPreview } from './roguelite/events';
 import { eliteModifiers, relicEffect, createShop, RELICS, type RelicId, type EliteModifier } from './roguelite/economy';
 import { createRun, availableNodes, encounterRoster, nodeSeed, type RunState, type MapNode } from './roguelite/map';
 import { EncounterDirector, emptyCoordination } from './director';
@@ -164,7 +165,9 @@ export class GameEngine {
   travelNode(): boolean {
     const r = this.run;
     if (!r || !r.selected || !availableNodes(r).includes(r.selected)) return false;
-    const node = r.map.find(n => n.id === r.selected)!;
+    let node = r.map.find(n => n.id === r.selected)!;
+    if (node.kind === 'unknown') resolveUnknown(r, node);
+    node = effectiveNode(r,node);
     r.current = node.id; r.visited.push(node.id); r.selected = null;
     if (['battle', 'elite', 'boss'].includes(node.kind)) this.beginEncounter(node);
     else { r.phase = 'node'; this.world.phase = 'sector-clear'; if (node.kind === 'shop') r.economy.shops[node.id] ??= createShop(r, node); }
@@ -200,14 +203,33 @@ export class GameEngine {
 
   completeNode(): boolean {
     const r = this.run;
-    if (!r || !r.current || !['node', 'reward'].includes(r.phase) || r.completed.includes(r.current) || r.phase === 'reward' && !this.world.upgradeClaimed) return false;
-    const node = r.map.find(n => n.id === r.current)!;
+    if (!r || !r.current || !['node', 'reward'].includes(r.phase) || r.completed.includes(r.current) || r.phase === 'reward' && !this.world.upgradeClaimed || r.phase === 'node' && r.events.resolved[r.current]?.kind === 'event' && !r.events.resolved[r.current]?.choice) return false;
+    const node = effectiveNode(r,r.map.find(n => n.id === r.current)!);
     r.completed.push(node.id); this.syncRunResources();
     if (node.kind === 'boss') {
       if (r.act === 3) { r.phase = 'finished'; this.world.phase = 'won'; return true; }
       r.act++;
     }
     r.phase = 'map'; this.world.phase = 'sector-clear';
+    return true;
+  }
+
+  chooseEvent(choice: string): boolean {
+    const r = this.run;
+    if (!r || r.phase !== 'node' || !r.current) return false;
+    const record = r.events.resolved[r.current];
+    if (!record || record.kind !== 'event') return false;
+    this.syncRunResources();
+    const preview = eventPreview(r,record,choice);
+    if (!preview) return false;
+    record.scrapBefore = r.economy.scrap; record.scrapAfter = preview.economy.scrap;
+    record.before = structuredClone(r.resources); record.after = structuredClone(preview.resources);
+    record.choice = choice; record.result = preview.result; record.combat = preview.combat;
+    r.resources = preview.resources; r.economy = preview.economy;
+    const w=this.world;
+    w.player.damage=r.resources.damage; w.stocks=r.resources.stocks;
+    w.loadout=structuredClone(r.resources.loadout);w.upgrades=structuredClone(r.resources.upgrades);
+    if (preview.combat) this.beginEncounter({...r.map.find(n=>n.id===r.current)!,kind:'elite'});
     return true;
   }
 
@@ -252,7 +274,7 @@ export class GameEngine {
   claimNodeBenefit(choice: 'treasure' | 'repair' | 'upgrade'): boolean {
     const r = this.run, w = this.world;
     if (!r || r.phase !== 'node' || !r.current || r.economy.nodeClaims.includes(r.current)) return false;
-    const node = r.map.find(n => n.id === r.current)!;
+    const node = effectiveNode(r,r.map.find(n => n.id === r.current)!);
     if (node.kind === 'treasure' && choice === 'treasure') {
       const available = RELICS.filter(v => !r.economy.relics.includes(v.id) && (v.id !== 'reserve' || w.stocks < 4));
       const relic = available[nodeSeed(r.seed,`treasure:${node.id}`) % available.length];
@@ -1590,10 +1612,10 @@ export class GameEngine {
     if (this.run) {
       if (this.run.phase !== 'combat') return;
       this.run.phase = 'reward';
-      const r = this.run, node = r.map.find(n => n.id === r.current)!;
+      const r = this.run, node = effectiveNode(r,r.map.find(n => n.id === r.current)!);
       if (!r.economy.rewards.includes(node.id)) {
         r.economy.rewards.push(node.id);
-        r.economy.scrap += Math.round((node.kind === 'boss' ? 90 : node.kind === 'elite' ? 60 : 30) * relicEffect(r.economy.relics, 'reward'));
+        r.economy.scrap += Math.round((node.kind === 'boss' ? 90 : node.kind === 'elite' || r.events.resolved[node.id]?.combat ? 60 : 30) * relicEffect(r.economy.relics, 'reward'));
         if (r.economy.relics.includes('solder')) w.player.damage = Math.max(0,w.player.damage - 15);
       }
       w.upgradeChoices = createUpgradeChoices(nodeSeed(r.seed,'reward'), nodeSeed(0,node.id),w.loadout,w.upgrades);

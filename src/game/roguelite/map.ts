@@ -1,16 +1,17 @@
+import { createEvents, type EventState } from './events';
 import { createEconomy, type Economy } from './economy';
 import { seededRandom } from '../loadouts';
 import { STAGES } from '../campaign';
 import type { ActorKind, Loadout } from '../types';
 import type { RunUpgrade } from '../upgrades';
 
-export type NodeKind = 'battle' | 'elite' | 'shop' | 'unknown' | 'treasure' | 'rest' | 'boss';
+export type NodeKind = 'battle' | 'elite' | 'shop' | 'unknown' | 'treasure' | 'rest' | 'boss' | 'event';
 export interface MapNode { id: string; act: number; row: number; column: number; kind: NodeKind; theme: number; next: string[] }
 export interface Resources { damage: number; stocks: number; loadout: Loadout; upgrades: RunUpgrade[]; score: number; kills: number }
 export interface RunState {
   seed: number; map: MapNode[]; act: number; current: string | null; selected: string | null;
   visited: string[]; completed: string[]; phase: 'map' | 'node' | 'combat' | 'reward' | 'finished';
-  economy: Economy; resources: Resources; originalLoadout: Loadout; difficulty: 'standard';
+  events: EventState; economy: Economy; resources: Resources; originalLoadout: Loadout; difficulty: 'standard';
 }
 /** Keyed streams never consume one another. Map v1 is entirely CPU-only. */
 export function nodeSeed(seed: number, key: string): number {
@@ -39,7 +40,7 @@ export function generateMap(seed: number): MapNode[] {
   return nodes;
 }
 export function createRun(seed: number, loadout: Loadout): RunState {
-  return { economy: createEconomy(), seed, map: generateMap(seed), act: 1, current: null, selected: null, visited: [], completed: [], phase: 'map', resources: { damage: 0, stocks: 3, loadout: structuredClone(loadout), upgrades: [], score: 0, kills: 0 }, originalLoadout: structuredClone(loadout), difficulty: 'standard' };
+  return { events: createEvents(), economy: createEconomy(), seed, map: generateMap(seed), act: 1, current: null, selected: null, visited: [], completed: [], phase: 'map', resources: { damage: 0, stocks: 3, loadout: structuredClone(loadout), upgrades: [], score: 0, kills: 0 }, originalLoadout: structuredClone(loadout), difficulty: 'standard' };
 }
 export function availableNodes(run: RunState): string[] {
   if (run.phase !== 'map') return [];
