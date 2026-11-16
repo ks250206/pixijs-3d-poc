@@ -6,7 +6,7 @@ Baseline: `feat/weapon-animation` **`b730c5d`** (the weapon animation below). Fo
 
 Local verification of the whole change: TypeScript and lint pass; all 579 logic tests pass (2 `todo` entries record that the pile and cannon slams do not themselves reach the side lanes); the production build passes; all 48 Playwright cases pass against the production build in local Chromium (SwiftShader), with no retries; `git diff --check` passes.
 
-CI: not green. The GitHub Actions job stops at its 12-minute limit while still running browser tests — it already did on the pull request this stack sits on (31 browser cases; cancelled during the 23rd), before any of the motion or combat changes. The cases that ran passed. The suite takes about 4 minutes locally and several times longer on the CI runner's software renderer, so the full 48 cases have never completed there.
+CI: the browser suite runs as five parallel shards, balanced per test (`.github/workflows/pages.yml`), instead of one job. As a single job it was cancelled at the 12-minute limit mid-suite — already on the pull request this stack sits on, with 31 cases. On the first sharded run of this branch each shard finished in 4–9.5 minutes and all cases passed except one existing case, `route/shop/event screenshots and transactional refresh at 1200px`: it reloads three times at desktop size and takes 2.0–2.1 minutes on the CI runner's software renderer, right at the 120-second per-test limit, so it now has Playwright's slow-test allowance. The pull request's checks are the authoritative result for a given commit.
 
 ### Lane assist and ground dodge
 
