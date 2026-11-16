@@ -75,6 +75,11 @@ export const CHANNELS = [
   "elbowLX", "elbowLY", "elbowLZ", "elbowRX", "elbowRY", "elbowRZ",
   "footLX", "footLY", "footLZ", "footRX", "footRY", "footRZ",
   "footLPitch", "footRPitch", "kneeLX", "kneeRX",
+  /**
+   * How a carried weapon departs from its rest pose: pivot offset in the chest frame, extra
+   * elevation and heading of the shaft. Ignored while an attack's own segment drives the weapon.
+   */
+  "carryX", "carryY", "carryZ", "carryPitch", "carryYaw",
   /** Whole-body pitch about the ground contact (knockback tumble). */
   "tumble",
   /** 1: feet are anchored to the floor by the foot planter; 0: they follow the pose. */
@@ -92,6 +97,7 @@ export function restPose(spec: RigSpec): CorePose {
     elbowLX: -0.35, elbowLY: -0.1, elbowLZ: -1, elbowRX: 0.35, elbowRY: -0.1, elbowRZ: -1,
     footLX: -stance, footLY: 0, footLZ: 0, footRX: stance, footRY: 0, footRZ: 0,
     footLPitch: 0, footRPitch: 0, kneeLX: -0.12, kneeRX: 0.12,
+    carryX: 0, carryY: 0, carryZ: 0, carryPitch: 0, carryYaw: 0,
     tumble: 0, plant: 1,
   }; // prettier-ignore
 }
@@ -250,13 +256,15 @@ export function solveRig(
         sink();
         return holdMain();
       };
+      // Progress is judged against the miss itself, so even a hair's shortfall gets closed.
+      const gain = Math.min(1e-4, main.miss * 0.5);
       let next = move(scale(normalize(pull), main.miss + 0.01));
-      if (next.miss > main.miss - 1e-4) {
+      if (next.miss > main.miss - gain) {
         // Planted legs took the lift back: step in under the shaft instead of reaching up for it.
         const level = { x: pull.x, y: 0, z: pull.z };
         if (Math.hypot(level.x, level.z) < 1e-6) break;
         next = move(scale(normalize(level), main.miss + 0.02));
-        if (next.miss > main.miss - 1e-4) {
+        if (next.miss > main.miss - gain) {
           Object.assign(hipsP, before);
           sink();
           break;

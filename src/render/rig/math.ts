@@ -112,6 +112,21 @@ export function quatFromBasis(x: V3, y: V3, z: V3): Quat {
   return { x: q.x / l, y: q.y / l, z: q.z / l, w: q.w / l };
 }
 
+/** Turns unit `a` toward unit `b` along the great arc; opposed directions go round a level axis. */
+export function slerpUnit(a: V3, b: V3, t: number): V3 {
+  if (t <= 0) return a;
+  if (t >= 1) return b;
+  const cos = clamp(dot(a, b), -1, 1);
+  const angle = Math.acos(cos);
+  if (angle < 1e-5) return normalize(lerp(a, b, t), b);
+  if (Math.PI - angle < 1e-3) {
+    const axis = reject({ x: 0, y: 1, z: 0 }, a, { x: 1, y: 0, z: 0 });
+    return rotate(quatAxis(axis, Math.PI * t), a);
+  }
+  const sin = Math.sin(angle);
+  return add(scale(a, Math.sin((1 - t) * angle) / sin), scale(b, Math.sin(t * angle) / sin));
+}
+
 /** Shortest signed difference between two angles, in (-π, π]. */
 export function angleDelta(from: number, to: number): number {
   const d = (to - from) % (Math.PI * 2);

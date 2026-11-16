@@ -3,22 +3,60 @@ import { GameEngine } from '../src/game/engine';
 import { createCandidates } from '../src/game/loadouts';
 import { sampleWeapon } from '../src/game/combat/geometry';
 import { utilityMove } from '../src/game/combat/moves';
+import { PIVOT_X, PIVOT_Y, WEAPON_REST } from '../src/game/combat/trajectory';
 import { EMPTY_INPUT, type Actor, type ActorKind, type InputFrame, type WeaponId } from '../src/game/types';
 import { RigAnimator, type RigFrame } from '../src/render/rig/animator';
-import { distance } from '../src/render/rig/math';
-import { joints, nonFinite, segmentDistance, stretchedBones, worldToRig } from './helpers/rig';
+import { distance, rotate, type V3 } from '../src/render/rig/math';
+import { joints, nonFinite, rigToWorld, segmentDistance, stretchedBones, worldToRig } from './helpers/rig';
 
 const WEAPONS: WeaponId[] = ['arc', 'pile', 'razor', 'lance', 'cannon', 'scythe'];
-/** How close the main hand must be to the authoritative shaft once the hit is live (rig units). */
-const ON_WEAPON = 0.02;
+/** How close the main hand must be to the authoritative shaft on hit frames (observed ~1e-16). */
+const ON_WEAPON = 1e-6;
+/** The held segment on a hit frame is the checked capsule, up to the world → rig conversion. */
+const EXACT = 1e-9;
 /**
- * Per-frame joint travel limits (rig units) across state changes, from observed maxima plus headroom.
- * Any joint gets more room than the hands because world-anchored feet swing through rig space while
- * the body turns round (about 0.44 per frame on the first frame of a turn).
+ * The main hand never strays further than this from the weapon, even while easing onto it
+ * (observed 0 for every weapon but razor: the other hands never leave the shaft).
+ */
+const MAX_HAND_OFF = 0.4;
+/**
+ * Razor claws alternate the leading hand with the combo stage while the weapon stays on one
+ * centre line, so on a hand switch the newly leading hand starts up to ~0.7 away and eases on
+ * during the wind-up (and the right hand eases back when the carry resumes). Observed 0.685.
+ */
+const MAX_HAND_OFF_RAZOR = 0.8;
+/**
+ * Per-frame joint travel limits (rig units) across locomotion state changes, from observed maxima
+ * plus headroom. Any joint gets more room than the hands because world-anchored feet swing through
+ * rig space while the body turns round (about 0.44 per frame on the first frame of a turn).
  */
 const MAX_HAND_STEP = 0.45;
 const MAX_HIPS_STEP = 0.2;
 const MAX_JOINT_STEP = 0.6;
+/**
+ * Weapon-tip travel per frame: world metres, minus the actor's own displacement and minus what the
+ * root turning under it (yaw easing, knockback tumble) accounts for. Calibrated on the sequences in
+ * this file for all six weapons, with ~30% headroom:
+ *
+ * - Carried weapon (outside swings; also shots and unarmed moves): at most CARRY_TURN · length +
+ *   CARRY_SHIFT. The largest steps are the hurt flinch (a 0.05 s blend), observed at ≈ 0.64 ·
+ *   length + 0.15 for every weapon (lance 1.62, scythe 1.26, pile 0.99, arc 0.93, cannon 0.86,
+ *   razor 0.48): about 0.6 rad of swing in one frame plus the chest's own travel.
+ * - Swinging: the held tip may outrun the authoritative tip's own pace (its largest step over
+ *   this frame and the two beside it; a wind-up can all but stall for a frame) by at most
+ *   CATCH_STEP while it catches up from the carry before the hit frames. Observed ≈ 0.38 (razor
+ *   down aerial, f3 of a 3-frame wind-up).
+ * - On the frame an attack starts or ends, and the one after, the step may be at most OUTLIER ×
+ *   the largest step around it (held or authoritative, ±3 frames, never below FLOOR so an idle
+ *   neighbourhood is not a zero reference). Observed ≤ 1.23 (arc jab, second combo hit, start).
+ */
+const CARRY_TURN = 0.85;
+const CARRY_SHIFT = 0.2;
+const CATCH_STEP = 0.5;
+const OUTLIER = 1.6;
+const FLOOR = 0.3;
+/** Behaviors whose held weapon is the carry (none, area) or a shot's barrel, not the swung capsule. */
+const UNARMED = ['none', 'area', 'projectile', 'cannon', 'mortar'];
 
 function lab(weapon: WeaponId, facing: 1 | -1 = 1) {
   const g = new GameEngine(41);
@@ -30,18 +68,46 @@ function lab(weapon: WeaponId, facing: 1 | -1 = 1) {
   return g;
 }
 
+/** What each frame left behind for the weapon-continuity checks. */
+interface Sample {
+  label: string;
+  state: string;
+  attack: boolean;
+  /** Changes whenever a new attack begins (or one is restarted) and when attacking stops. */
+  attackKey: string;
+  actor: { x: number; y: number; z: number; scale: number };
+  yaw: number;
+  tumble: number;
+  /** Held tip in rig space, and the held weapon's natural length in world metres. */
+  tip: V3;
+  length: number;
+  /** The held weapon is the authoritative swing (not the carry, and not a shot's barrel). */
+  swinging: boolean;
+  /** The authoritative capsule's tip in world space, while attacking. */
+  auth: V3 | null;
+}
+
+
 /** Steps the engine and the animator together exactly as the renderer does, checking every frame. */
 class Rig {
   readonly animator = new RigAnimator('player');
   readonly frames: RigFrame[] = [];
+  readonly samples: Sample[] = [];
   readonly problems: string[] = [];
+  /**
+   * Frames whose held weapon claimed `live` outside the hit frames. Kept apart from `problems` so
+   * this one contract has its own test and does not mask the others.
+   */
+  readonly mislabelled: string[] = [];
   /** Per frame: a readable context, and a key that changes whenever the animated state does. */
   readonly labels: string[] = [];
   readonly keys: string[] = [];
   private attackSerial = 0;
   private lastAttack: { ref: object | null; elapsed: number } = { ref: null, elapsed: 0 };
-  /** Ticks on which the main hand was required to be (and was checked) on the shaft. */
+  /** Ticks on which the held weapon was required to be (and was checked) the live capsule. */
   activeChecks = 0;
+  /** Largest main-hand distance from the held weapon, and where. */
+  worstHandOff = { d: 0, at: '' };
   constructor(readonly g: GameEngine) {}
 
   get player() {
@@ -55,27 +121,59 @@ class Rig {
     g.world.pendingSpawns = [];
     if (pin) Object.assign(p, { y: pin.y, vy: 0 });
     g.update(1 / 60, { ...EMPTY_INPUT, ...input });
+    return this.observe();
+  }
+
+  /** Runs the animator on the engine's current state (as one rendered frame) and checks it. */
+  observe(): RigFrame {
+    const { g } = this;
+    const p = this.player;
     const capsule = p.attack?.collision?.capsule ?? null;
     const frame = this.animator.update(p, g.world.time, g.world.loadout.weapon, capsule);
     const tick = this.frames.length;
     const where = `tick ${tick} ${p.state}${p.attack ? ` ${p.attack.move?.id ?? p.attack.name} f${(p.attack.elapsed * 60).toFixed(1)}` : ''}`;
-    for (const bad of nonFinite(frame)) this.problems.push(`${where}: ${bad}`);
-    for (const bad of stretchedBones(this.animator.spec, frame.rig)) this.problems.push(`${where}: ${bad}`);
-    if (p.attack?.collision?.active) {
-      if (!frame.weapon) this.problems.push(`${where}: active hit without a held weapon`);
-      else {
-        this.activeChecks++;
-        const hand = frame.weapon.main === 'R' ? frame.rig.handR : frame.rig.handL;
-        // Independent world → rig conversion of the authoritative capsule.
-        const a = worldToRig(p, frame.yaw, p.attack.collision.capsule.a);
-        const b = worldToRig(p, frame.yaw, p.attack.collision.capsule.b);
-        const off = segmentDistance(hand, a, b).distance;
-        if (!(off < ON_WEAPON)) this.problems.push(`${where}: main hand ${off.toFixed(4)} from the weapon`);
-      }
-    }
+    const problem = (message: string) => this.problems.push(`${where}: ${message}`);
+    for (const bad of nonFinite(frame)) problem(bad);
+    for (const bad of stretchedBones(this.animator.spec, frame.rig)) problem(bad);
     // A new attack object, or the same one restarted, is a new state.
     if (p.attack && (p.attack !== this.lastAttack.ref || p.attack.elapsed < this.lastAttack.elapsed)) this.attackSerial++;
     this.lastAttack = { ref: p.attack, elapsed: p.attack?.elapsed ?? 0 };
+
+    const held = frame.held;
+    if (!held || !frame.weapon) problem(`the player holds no weapon (held ${!!held}, constraint ${!!frame.weapon})`);
+    else {
+      const hand = frame.weapon.main === 'R' ? frame.rig.handR : frame.rig.handL;
+      const off = segmentDistance(hand, held.a, held.b).distance;
+      if (off > this.worstHandOff.d) this.worstHandOff = { d: off, at: where };
+      // `easing` is the hand-easing offset the animator actually applied this frame (0: none).
+      const easing = frame.easing[frame.weapon.main];
+      if (easing === 0 && !(off < 1e-6)) problem(`main hand ${off.toExponential(2)} off the weapon with no easing in progress (grip miss ${frame.rig.grip?.miss})`);
+      const limit = held.style === 'razor' ? MAX_HAND_OFF_RAZOR : MAX_HAND_OFF;
+      if (!(off <= limit)) problem(`main hand ${off.toFixed(3)} off the weapon (> ${limit}; easing ${easing.toFixed(3)})`);
+      if (p.attack?.collision?.active) {
+        this.activeChecks++;
+        // Independent world → rig conversion of the authoritative capsule.
+        const a = worldToRig(p, frame.yaw, p.attack.collision.capsule.a);
+        const b = worldToRig(p, frame.yaw, p.attack.collision.capsule.b);
+        if (!held.live) problem('hit frame, but the held weapon is not marked live');
+        if (!(distance(held.a, a) < EXACT && distance(held.b, b) < EXACT)) problem(`hit frame, but the held weapon is ${Math.max(distance(held.a, a), distance(held.b, b)).toExponential(2)} from the capsule`);
+        const onCapsule = segmentDistance(hand, a, b).distance;
+        if (!(onCapsule < ON_WEAPON)) problem(`main hand ${onCapsule.toExponential(2)} from the live capsule`);
+      } else if (held.live) this.mislabelled.push(`${where}: not a hit frame, but the held weapon is marked live`);
+      this.samples.push({
+        label: where,
+        state: p.state,
+        attack: p.state === 'attack',
+        attackKey: p.state === 'attack' ? `${this.attackSerial}` : '',
+        actor: { x: p.x, y: p.y, z: p.z, scale: p.scale },
+        yaw: frame.yaw,
+        tumble: frame.tumble,
+        tip: held.b,
+        length: WEAPON_REST[held.style].length * p.scale,
+        swinging: p.state === 'attack' && !!capsule && !UNARMED.includes(p.attack?.move?.behavior ?? 'none'),
+        auth: p.state === 'attack' && capsule ? capsule.b : null,
+      });
+    }
     this.labels.push(where);
     this.keys.push(`${p.state}:${p.attack ? this.attackSerial : ''}:${p.y > 0.02 ? 'air' : 'ground'}`);
     this.frames.push(frame);
@@ -86,12 +184,18 @@ class Rig {
     for (let i = 0; i < count; i++) this.step(input, pin);
   }
 
+  /** Steps until the current attack is over (bounded), then `after` more frames. */
+  finishAttack(after = 0, input: Partial<InputFrame> = {}, pin?: { y: number }) {
+    for (let i = 0; i < 180 && this.player.state === 'attack'; i++) this.step(input, pin);
+    this.run(after, input, pin);
+  }
+
   /**
    * Largest per-frame travel of the hands, the hips and any joint, with where it happened.
    * `only` restricts which frame indices are measured (the step into frame i is measured at i).
    */
   travel(only: (i: number) => boolean = () => true) {
-    const worst = { hands: { d: 0, at: '' }, hips: { d: 0, at: '' }, any: { d: 0, at: '' } };
+    const worst = { hands: { d: 0, at: '' }, hips: { d: 0, at: '' }, any: { d: 0, at: '' }, body: { d: 0, at: '' } };
     for (let i = 1; i < this.frames.length; i++) {
       if (!only(i)) continue;
       const before = joints(this.frames[i - 1]!.rig), after = joints(this.frames[i]!.rig); // prettier-ignore
@@ -101,6 +205,8 @@ class Rig {
         if ((name === 'handL' || name === 'handR') && d > worst.hands.d) worst.hands = { d, at };
         if (name === 'hips' && d > worst.hips.d) worst.hips = { d, at };
         if (d > worst.any.d) worst.any = { d, at };
+        // Hips and legs: the arms ride the weapon and, in a spin, so does the whole trunk above the hips.
+        if (/^(hips|hip[LR]|knee|ankle)/.test(name) && d > worst.body.d) worst.body = { d, at };
       }
     }
     return worst;
@@ -116,6 +222,77 @@ class Rig {
       }
     return out;
   }
+
+  /**
+   * Per-frame weapon-tip travel in world space minus the actor's own displacement, less the part
+   * the root turning (yaw easing, knockback tumble) accounts for by carrying last frame's tip round
+   * with it; with the authoritative capsule tip's own travel alongside, while attacking.
+   */
+  tipSteps() {
+    const s = this.samples;
+    const out: { net: number; auth: number; swinging: boolean; length: number; state: string; label: string }[] = [];
+    const world = (k: number, j = k) => rigToWorld(s[k]!.actor, s[k]!.yaw, s[j]!.tip, s[k]!.tumble);
+    const minus = (p: V3, q: V3) => ({ x: p.x - q.x, y: p.y - q.y, z: p.z - q.z });
+    for (let i = 0; i < s.length; i++) {
+      if (i === 0) {
+        out.push({ net: 0, auth: NaN, swinging: s[0]!.swinging, length: s[0]!.length, state: s[0]!.state, label: s[0]!.label });
+        continue;
+      }
+      const shift = minus(s[i]!.actor, s[i - 1]!.actor);
+      const travel = minus(minus(world(i), world(i - 1)), shift);
+      // Where last frame's tip would be if only the root had turned under it.
+      const turned = minus(minus(world(i, i - 1), world(i - 1)), shift);
+      const sameAttack = s[i]!.swinging && s[i - 1]!.swinging && s[i]!.attackKey === s[i - 1]!.attackKey;
+      out.push({
+        net: Math.max(0, Math.hypot(travel.x, travel.y, travel.z) - Math.hypot(turned.x, turned.y, turned.z)),
+        auth: sameAttack ? Math.hypot(...Object.values(minus(minus(s[i]!.auth!, s[i - 1]!.auth!), shift))) : NaN,
+        swinging: s[i]!.swinging,
+        length: s[i]!.length,
+        state: s[i]!.state,
+        label: s[i]!.label,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * The weapon never teleports: bounded steps outside attacks, never much faster than the
+   * authoritative weapon during them, and no outlier on the frames an attack starts or ends.
+   */
+  weaponJumps(): string[] {
+    const steps = this.tipSteps();
+    const out: string[] = [];
+    for (let i = 1; i < steps.length; i++) {
+      const { net, auth, length, label } = steps[i]!;
+      if (Number.isFinite(auth)) {
+        // The authoritative tip's own pace around this frame (its wind-up can stall for a frame).
+        const pace = Math.max(...[i - 1, i, i + 1].map((j) => steps[j]?.auth ?? NaN).filter(Number.isFinite));
+        if (!(net <= pace + CATCH_STEP)) out.push(`${label}: tip moved ${net.toFixed(3)}, the authoritative tip at most ${pace.toFixed(3)} around it`);
+      } else if (!(net <= CARRY_TURN * length + CARRY_SHIFT))
+        out.push(`${label}: tip moved ${net.toFixed(3)} (> ${CARRY_TURN} × its ${length} m length + ${CARRY_SHIFT})`);
+    }
+    const s = this.samples;
+    for (let t = 1; t < s.length; t++) {
+      if (s[t]!.attackKey === s[t - 1]!.attackKey) continue;
+      const edge = new Set([t, t + 1]);
+      for (const i of [...edge].filter((i) => i < steps.length)) {
+        let reference = FLOOR;
+        for (let j = Math.max(1, i - 3); j <= Math.min(steps.length - 1, i + 3); j++) {
+          if (Number.isFinite(steps[j]!.auth)) reference = Math.max(reference, steps[j]!.auth);
+          if (!edge.has(j)) reference = Math.max(reference, steps[j]!.net);
+        }
+        if (!(steps[i]!.net <= OUTLIER * reference))
+          out.push(`${steps[i]!.label}: tip moved ${steps[i]!.net.toFixed(3)} as an attack ${s[t]!.attack ? 'starts' : 'ends'}, against at most ${reference.toFixed(3)} on the frames around it`);
+      }
+    }
+    return out;
+  }
+}
+
+/** Asserts the measured frames never jump, and that no frame was non-finite, stretched or dropped its weapon. */
+function expectSound(rig: Rig) {
+  expect(rig.problems.slice(0, 8)).toEqual([]);
+  expect(rig.weaponJumps().slice(0, 8)).toEqual([]);
 }
 
 type Attack = { label: string; input: Partial<InputFrame>; air?: boolean; kind: string; direction: string };
@@ -131,7 +308,7 @@ const attacks = (facing: 1 | -1): Attack[] => [
 describe('RigAnimator on live player attacks', () => {
   for (const weapon of WEAPONS)
     for (const facing of [1, -1] as const)
-      it(`${weapon} facing ${facing}: rigid, finite, and the main hand rides the live weapon`, () => {
+      it(`${weapon} facing ${facing}: rigid, finite, always armed, and the weapon is the live capsule on hit frames`, () => {
         const failures: string[] = [];
         for (const attack of attacks(facing)) {
           const rig = new Rig(lab(weapon, facing));
@@ -142,22 +319,154 @@ describe('RigAnimator on live player attacks', () => {
           expect(p.attack?.kind, attack.label).toBe(attack.kind);
           expect(p.attack?.direction, attack.label).toBe(attack.direction);
           const move = p.attack!.move!;
-          for (let i = 0; i < 120 && p.state === 'attack'; i++) rig.step({}, pin);
+          rig.finishAttack(10, {}, pin);
           expect(p.state, attack.label).not.toBe('attack');
-          rig.run(10, {}, pin);
           failures.push(...rig.problems.map((m) => `${attack.label}: ${m}`));
-          // Every melee move has a live window that was actually checked; ranged cannon shots hold nothing.
+          failures.push(...rig.weaponJumps().map((m) => `${attack.label}: ${m}`));
+          // Every melee move has a live window that was actually checked; ranged cannon shots never go live.
           if (move.behavior === 'melee') expect(rig.activeChecks, attack.label).toBeGreaterThan(0);
-          else expect(rig.frames.every((f) => f.weapon === null), attack.label).toBe(true);
+          else expect(rig.frames.every((f) => f.held !== null && !f.held.live), attack.label).toBe(true);
         }
         expect(failures.slice(0, 8)).toEqual([]);
       });
+
+  it.each(WEAPONS)('%s: held.live is true exactly on the hit frames (collision.active), never in wind-up or recovery', (weapon) => {
+    const mislabelled: string[] = [];
+    let live = 0;
+    for (const attack of attacks(1)) {
+      const rig = new Rig(lab(weapon));
+      const pin = attack.air ? { y: 3 } : undefined;
+      rig.run(20, {}, pin);
+      rig.step(attack.input, pin);
+      rig.finishAttack(10, {}, pin);
+      live += rig.frames.filter((f) => f.held?.live).length;
+      mislabelled.push(...rig.mislabelled.map((m) => `${attack.label}: ${m}`));
+    }
+    expect(mislabelled.slice(0, 6), `${mislabelled.length} frames`).toEqual([]);
+    if (weapon !== 'cannon') expect(live).toBeGreaterThan(0);
+  });
+});
+
+describe('RigAnimator held weapon', () => {
+  it.each(WEAPONS)('%s: idle carries the weapon at rest on the chest', (weapon) => {
+    for (const facing of [1, -1] as const) {
+      const rig = new Rig(lab(weapon, facing));
+      rig.run(40);
+      expect(rig.player.state).toBe('idle');
+      for (const frame of rig.frames.slice(-10)) {
+        const held = frame.held!;
+        const along = { x: held.b.x - held.a.x, y: held.b.y - held.a.y, z: held.b.z - held.a.z };
+        const length = Math.hypot(along.x, along.y, along.z);
+        expect(held.style).toBe(weapon);
+        expect(held.live).toBe(false);
+        expect(Math.abs(length - WEAPON_REST[weapon].length)).toBeLessThan(1e-12);
+        expect(Math.abs(Math.asin(along.y / length) - WEAPON_REST[weapon].angle)).toBeLessThan(0.06);
+        expect(along.z, 'points forward').toBeGreaterThan(0);
+        // It rides the chest, so it breathes with it.
+        expect(distance(held.a, { x: 0, y: PIVOT_Y, z: PIVOT_X })).toBeLessThan(0.05);
+      }
+      expect(rig.problems).toEqual([]);
+    }
+  });
+
+  it.each(['neutral jab', 'forward tilt'])('cannon %s: a shot points the barrel down the line of fire at its natural length, never live', (label) => {
+    const rig = new Rig(lab('cannon'));
+    rig.run(30);
+    rig.step(attacks(1).find((a) => a.label === label)!.input);
+    const p = rig.player;
+    const move = p.attack!.move!;
+    expect(move.behavior).toBe('cannon');
+    let settled = 0;
+    while (p.state === 'attack') {
+      const frame = rig.frames.at(-1)!;
+      const held = frame.held!;
+      expect(held.live).toBe(false);
+      if (p.attack!.elapsed >= 0.1) {
+        settled++;
+        const c = p.attack!.collision!.capsule;
+        const a = worldToRig(p, frame.yaw, c.a), b = worldToRig(p, frame.yaw, c.b); // prettier-ignore
+        const shot = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+        const barrel = { x: held.b.x - held.a.x, y: held.b.y - held.a.y, z: held.b.z - held.a.z };
+        const ls = Math.hypot(shot.x, shot.y, shot.z), lb = Math.hypot(barrel.x, barrel.y, barrel.z); // prettier-ignore
+        expect(Math.abs(lb - WEAPON_REST.cannon.length), rig.labels.at(-1)).toBeLessThan(1e-6);
+        expect(distance({ x: shot.x / ls, y: shot.y / ls, z: shot.z / ls }, { x: barrel.x / lb, y: barrel.y / lb, z: barrel.z / lb }), rig.labels.at(-1)).toBeLessThan(1e-6);
+      }
+      rig.step();
+    }
+    expect(settled).toBeGreaterThan(20);
+    rig.run(20);
+    expectSound(rig);
+  });
+
+  it.each(WEAPONS)('%s: armed in every state (idle, run, jump, fall, dodge, charge, attack, throw, hurt)', (weapon) => {
+    const rig = new Rig(lab(weapon));
+    const g = rig.g;
+    const p = rig.player;
+    const seen = new Set<string>();
+    const step = (input: Partial<InputFrame> = {}) => {
+      rig.step(input);
+      seen.add(p.state);
+    };
+    for (let i = 0; i < 30; i++) step();
+    for (let i = 0; i < 20; i++) step({ moveX: 1 });
+    step({ jump: true, jumpHeld: true });
+    for (let i = 0; i < 80 && (p.y > 0 || i < 5); i++) step();
+    for (let i = 0; i < 10; i++) step();
+    step({ dodge: true });
+    for (let i = 0; i < 40; i++) step();
+    // Charge a smash, then release it.
+    step({ smash: true, smashHeld: true });
+    for (let i = 0; i < 20; i++) step({ smashHeld: true });
+    for (let i = 0; i < 120 && p.state !== 'idle'; i++) step();
+    // A grab with nobody in reach whiffs as a throw-kind attack.
+    step({ grab: true });
+    for (let i = 0; i < 60 && p.state !== 'idle'; i++) step();
+    // Knocked back by an enemy (the engine's own hit routine), then recovering.
+    const source: Actor = { ...p, id: 'test-enemy', kind: 'scout', x: p.x - 1, facing: 1, attack: null, state: 'attack' };
+    expect(g['hit'](p, source, 12, 9, 0.1, 0.9, 1, 'enemy')).toBe(true);
+    rig.observe();
+    seen.add(p.state);
+    for (let i = 0; i < 150 && p.state !== 'idle'; i++) step();
+    for (let i = 0; i < 20; i++) step();
+    for (const state of ['idle', 'run', 'jump', 'fall', 'dodge', 'charge', 'attack', 'hurt']) expect([...seen], state).toContain(state);
+    expectSound(rig);
+  });
+});
+
+describe('RigAnimator trunk after a strike', () => {
+  /** Heading of the hips about +Y in rig space (0 = facing forward), wrapped to (−π, π]. */
+  const hipsHeading = (f: RigFrame) => {
+    const forward = rotate(f.rig.hips.q, { x: 0, y: 0, z: 1 });
+    return Math.atan2(forward.x, forward.z);
+  };
+
+  it.each(WEAPONS)('%s: every strike hands the body back facing forward (no whirl round once it is over)', (weapon) => {
+    const failures: string[] = [];
+    const inputs: [string, Partial<InputFrame>][] = [
+      ['neutral jab', { attack: true }], ['forward tilt', { attack: true, moveX: 1 }], ['up tilt', { attack: true, moveZ: -1 }],
+      ['down tilt', { attack: true, moveZ: 1 }], ['back tilt', { attack: true, moveX: -1 }], ['forward smash', { smash: true, moveX: 1 }],
+    ]; // prettier-ignore
+    for (const [label, input] of inputs) {
+      const rig = new Rig(lab(weapon));
+      rig.run(30);
+      rig.step(input);
+      for (let i = 0; i < 40 && rig.player.state !== 'attack'; i++) rig.step(); // a smash charges first
+      expect(rig.player.state, label).toBe('attack');
+      rig.finishAttack();
+      // The attack's last frame: its weapon is back at rest, in front.
+      let last = rig.keys.length - 1;
+      while (last > 0 && !rig.keys[last]!.startsWith('attack')) last--;
+      const heading = hipsHeading(rig.frames[last]!);
+      if (!(Math.abs(heading) < 0.35)) failures.push(`${label}: ${rig.labels[last]} hips face ${heading.toFixed(2)} rad from forward`);
+    }
+    expect(failures).toEqual([]);
+  });
 });
 
 describe('RigAnimator continuity', () => {
   /** Asserts the measured frames never jump, and that no frame was non-finite or stretched. */
   function expectSmooth(rig: Rig, only?: (i: number) => boolean) {
-    expect(rig.problems.slice(0, 8)).toEqual([]);
+    expectSound(rig);
     const t = rig.travel(only);
     expect(t.hands.d, t.hands.at).toBeLessThan(MAX_HAND_STEP);
     expect(t.hips.d, t.hips.at).toBeLessThan(MAX_HIPS_STEP);
@@ -186,8 +495,7 @@ describe('RigAnimator continuity', () => {
     // Single attacks separated by idle.
     for (const input of [{ attack: true }, { attack: true, moveZ: -1 }, { attack: true, moveX: 1 }]) {
       rig.step(input);
-      for (let i = 0; i < 120 && rig.player.state === 'attack'; i++) rig.step();
-      rig.run(25);
+      rig.finishAttack(25);
     }
     // Mashed attack presses: buffered chains and jab combos.
     const seen = new Set<string>();
@@ -197,11 +505,57 @@ describe('RigAnimator continuity', () => {
     }
     rig.run(60);
     expect(seen.size).toBeGreaterThanOrEqual(2);
+    expectSound(rig);
     // Inside a move the authoritative weapon drives the hands (a scythe orbits a full turn in a few
-    // frames), so continuity is measured across the state changes themselves.
+    // frames, and its spin takes the trunk round with it), so arms and shoulders may move fast; the
+    // weapon checks above cover them. The hips and legs must still not jump across the state changes.
     const transitions = rig.transitions();
     expect(transitions.size).toBeGreaterThan(10);
-    expectSmooth(rig, (i) => transitions.has(i));
+    const t = rig.travel((i) => transitions.has(i));
+    expect(t.hips.d, t.hips.at).toBeLessThan(MAX_HIPS_STEP);
+    expect(t.body.d, t.body.at).toBeLessThan(MAX_JOINT_STEP);
+  });
+
+  it.each(WEAPONS)('%s: attack → run, and jump → aerial → land', (weapon) => {
+    const rig = new Rig(lab(weapon));
+    rig.run(30);
+    // Run out of an attack's recovery.
+    rig.step({ attack: true, moveX: 1 });
+    rig.finishAttack(40, { moveX: 1 });
+    expect(rig.player.state).toBe('run');
+    rig.run(30);
+    // Jump, attack at the apex, fall and land.
+    rig.step({ jump: true, jumpHeld: true });
+    rig.run(6, { jumpHeld: true });
+    rig.step({ attack: true });
+    expect(rig.player.attack?.kind).toBe('aerial');
+    for (let i = 0; i < 150 && (rig.player.y > 0 || rig.player.state === 'attack'); i++) rig.step();
+    rig.run(30);
+    expectSound(rig);
+    const transitions = rig.transitions();
+    const t = rig.travel((i) => transitions.has(i));
+    expect(t.hips.d, t.hips.at).toBeLessThan(MAX_HIPS_STEP);
+    expect(t.body.d, t.body.at).toBeLessThan(MAX_JOINT_STEP);
+  });
+
+  it.each(WEAPONS)('%s: second combo hit (razor leads with the left) → idle, and an aerial on the same combo stage → fall → land', (weapon) => {
+    const rig = new Rig(lab(weapon));
+    rig.run(30);
+    rig.step({ attack: true });
+    rig.finishAttack();
+    rig.step({ attack: true });
+    expect(rig.player.attack?.combo).toBe(1);
+    rig.finishAttack(30);
+    // The combo stage persists, so this aerial is thrown on stage 1 as well.
+    rig.step({ jump: true, jumpHeld: true });
+    rig.run(4, { jumpHeld: true });
+    rig.step({ attack: true });
+    expect(rig.player.attack?.kind).toBe('aerial');
+    expect(rig.player.attack?.combo).toBe(1);
+    rig.finishAttack();
+    for (let i = 0; i < 150 && rig.player.y > 0; i++) rig.step();
+    rig.run(30);
+    expectSound(rig);
   });
 
   it('holds the pose on a paused clock', () => {
@@ -284,7 +638,7 @@ describe('RigAnimator on enemy rigs', () => {
         const capsule = actor.attack?.move ? sampleWeapon(actor, actor.attack.move, actor.attack.elapsed * 60) : null;
         const out = animator.update(actor, time, 'arc', capsule);
         for (const bad of [...nonFinite(out), ...stretchedBones(animator.spec, out.rig)]) problems.push(`${label} t=${time.toFixed(3)}: ${bad}`);
-        if (out.weapon !== null) problems.push(`${label}: an enemy rig claimed a held weapon`);
+        if (out.weapon !== null || out.held !== null) problems.push(`${label}: an enemy rig claimed a held weapon`);
         return out;
       };
       for (let i = 0; i < 30; i++) frame('idle');

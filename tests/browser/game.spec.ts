@@ -1,8 +1,9 @@
 import type { GameScene } from '../../src/render/scene';
 import { EMPTY_INPUT } from '../../src/game/types';
 import { expect, test, type Page } from '@playwright/test';
-import type { WorldState } from '../../src/game/types';
+import type { WeaponId, WorldState } from '../../src/game/types';
 import type { GameEngine } from '../../src/game/engine';
+import { WEAPON_REST } from '../../src/game/combat/trajectory';
 
 // A visible canvas can still contain only the 2D labels if the 3D render pass fails.
 // Sample the actual drawing buffer so that this cannot silently pass the smoke test.
@@ -645,5 +646,132 @@ test('jointed skeleton keeps rigid bones, grips the authoritative weapon and pla
     expect(longest, `${side} plants for at least two consecutive ticks`).toBeGreaterThanOrEqual(2);
   }
   expect(plantedTicks.L, 'feet alternate rather than planting together').not.toBe(plantedTicks.R);
+  await expectRenderedArena(page); expect(errors).toEqual([]);
+});
+
+
+test('one weapon model is carried, wound up, lands on the checked capsule and follows through', async ({ page }) => {
+  // Eleven whole-move traces and twenty frozen frames on the software renderer.
+  test.setTimeout(process.env.CI ? 240_000 : 90_000);
+  const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
+  await training(page, 'compat');
+  type P = { x: number; y: number; z: number };
+  const dist = (a: P, b: P) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+  const length = (t: { tip: P; pivot: P }) => dist(t.tip, t.pivot);
+  // Idles 40 ticks, then attacks and samples every tick until 20 ticks after the move has ended.
+  const trace = (weapon: WeaponId, facing: 1 | -1, moveX: number) => page.evaluate(({ weapon, facing, moveX, empty }) => {
+    const { engine, scene } = (window as unknown as { __UPRISING__: { engine: GameEngine; scene: GameScene } }).__UPRISING__;
+    engine.restart(); engine.world.loadout.weapon = weapon; engine.world.props = []; engine.world.enemies = []; engine.world.effects = []; engine.world.messageTime = 0;
+    const p = engine.world.player; Object.assign(p, { x: 0, y: 0, z: 0, vx: 0, vy: 0, facing, invulnerable: 0 });
+    const tick = (input = empty) => { engine.update(1 / 60, input); scene.update(engine.world, 1 / 60); };
+    const sample = () => {
+      const g = scene.combatGeometry(p.id), held = scene.rigDiagnostics(p.id)?.frame.held;
+      return { state: p.state, behavior: p.attack?.move?.behavior ?? null, startup: p.attack?.move?.frames.startup ?? 0, collision: p.attack?.collision ? structuredClone(p.attack.collision) : null, tip: g.tip!, pivot: g.pivot!, live: held?.live ?? false };
+    };
+    for (let i = 0; i < 40; i++) tick();
+    const ticks = [sample()];
+    tick({ ...empty, attack: true, moveX }); ticks.push(sample());
+    for (let i = 0, idle = 0; i < 300 && idle < 20; i++) { tick(); ticks.push(sample()); if (p.state !== 'attack') idle++; }
+    return ticks;
+  }, { weapon, facing, moveX, empty: EMPTY_INPUT });
+  const carried = (weapon: WeaponId, idle: Awaited<ReturnType<typeof trace>>[number]) => {
+    expect(idle.state, `${weapon} idles before attacking`).toBe('idle');
+    expect(idle.pivot.visible, `${weapon} carried weapon is drawn`).toBe(true);
+    expect(idle.pivot.style).toBe(weapon);
+    expect(Math.abs(length(idle) - WEAPON_REST[weapon].length), `${weapon} carried at its natural length`).toBeLessThan(2e-3);
+  };
+  // Soft: one weapon's defect must not hide another's (or skip the review screenshots).
+  for (const weapon of ['arc', 'pile', 'razor', 'lance', 'scythe'] as const) for (const facing of [1, -1] as const) {
+    const ticks = await trace(weapon, facing, facing), at = (i: number) => `${weapon} facing ${facing} tick ${i}`;
+    if (facing === 1) carried(weapon, ticks[0]!);
+    const hits = ticks.flatMap((t, i) => t.collision?.active ? [i] : []);
+    expect(hits.length, `${weapon} facing ${facing} has hit frames`).toBeGreaterThan(0);
+    ticks.forEach((t, i) => {
+      expect.soft(t.pivot.visible && t.pivot.style === weapon, `${at(i)} shows the ${weapon} (got ${t.pivot.style}, visible ${t.pivot.visible})`).toBe(true);
+      expect.soft(t.live, `${at(i)} held.live only on hit ticks`).toBe(!!t.collision?.active);
+      if (!t.collision?.active) return;
+      for (const axis of ['x', 'y', 'z'] as const) {
+        expect.soft(Math.abs(t.tip[axis] - t.collision.capsule.b[axis]), `${at(i)} tip ${axis} on capsule.b`).toBeLessThan(1e-4);
+        expect.soft(Math.abs(t.pivot[axis] - t.collision.capsule.a[axis]), `${at(i)} pivot ${axis} on capsule.a`).toBeLessThan(1e-4);
+      }
+    });
+    const travel = ticks.map((t, i) => i ? dist(t.tip, ticks[i - 1]!.tip) : 0);
+    const peak = Math.max(...hits.slice(1).map(i => travel[i]!));
+    const afterMove = ticks.findIndex((t, i) => i > 0 && t.state !== 'attack');
+    // 0.02 m: the carry breathes up to ~0.01 m a tick; every observed transition stayed under the hit-frame peak.
+    for (const [moment, i] of [['first attack tick', 1], ['first tick after the hit frames', hits.at(-1)! + 1], ['first tick after the attack', afterMove]] as const)
+      expect.soft(travel[i]!, `${at(i)} ${moment}: tip travel vs hit-frame peak ${peak.toFixed(3)}`).toBeLessThanOrEqual(peak + 0.02);
+    // A long wind-up releases at about the live arc's speed instead of snapping into the first hit frame.
+    if (ticks[1]!.startup >= 8) expect.soft(travel[hits[0]!]! / peak, `${weapon} facing ${facing} travel into the first hit tick vs hit-frame peak`).toBeLessThanOrEqual(1.5);
+    if (weapon === 'scythe') {
+      // An orbit ends where it began, so its wind-up is judged by heading: it must turn back against the spin.
+      const heading = ticks.map(t => Math.atan2(t.tip.z - t.pivot.z, t.tip.x - t.pivot.x));
+      for (let i = 1; i < heading.length; i++) heading[i] = heading[i - 1]! + Math.atan2(Math.sin(heading[i]! - heading[i - 1]!), Math.cos(heading[i]! - heading[i - 1]!));
+      const spin = Math.sign(heading[hits.at(-1)!]! - heading[hits[0]!]!);
+      const back = Math.max(...heading.slice(1, hits[0]).map(h => (heading[hits[0]!]! - h) * spin));
+      expect(spin, 'scythe spins').not.toBe(0);
+      expect.soft(back, `scythe facing ${facing} winds back against its spin (radians)`).toBeGreaterThan(0);
+    } else {
+      const strikeEnd = ticks[hits.at(-1)!]!.tip, idleGap = dist(ticks[0]!.tip, strikeEnd);
+      const drawn = Math.max(...ticks.slice(1, hits[0]).map(t => dist(t.tip, strikeEnd)));
+      expect.soft(drawn, `${weapon} facing ${facing} wind-up draws away from the strike's end (idle tip ${idleGap.toFixed(3)} m from it)`).toBeGreaterThan(idleGap);
+    }
+    // Settling into the carry turns the weapon rigidly: it never telescopes.
+    ticks.slice(afterMove).forEach((t, i) => expect.soft(Math.abs(length(t) - WEAPON_REST[weapon].length), `${weapon} facing ${facing} idle tick ${i} length ${length(t).toFixed(4)} m`).toBeLessThanOrEqual(.02));
+    const last = ticks.at(-1)!;
+    expect.soft(Math.abs(length(last) - WEAPON_REST[weapon].length), `${weapon} facing ${facing} back to its natural length (${length(last).toFixed(4)} m)`).toBeLessThan(5e-3);
+  }
+  const shot = await trace('cannon', 1, 0);
+  carried('cannon', shot[0]!);
+  expect(shot[1]!.behavior).toBe('cannon');
+  shot.forEach((t, i) => {
+    expect.soft(t.pivot.visible && t.pivot.style === 'cannon' && !t.live, `cannon tick ${i} drawn and never live`).toBe(true);
+    expect.soft(Math.abs(length(t) - WEAPON_REST.cannon.length), `cannon tick ${i} keeps its length (${length(t).toFixed(4)} m)`).toBeLessThan(5e-3);
+  });
+
+  // Review frames: wind-up (~60% of startup), strike (mid hit window), follow-through (~35% of recovery).
+  // `start`: a fresh run, the next attack once the current one ends (jab combo), or carry on.
+  const freeze = (weapon: WeaponId, moveX: number, phase: string, start: 'restart' | 'next' | 'continue') => page.evaluate(({ weapon, moveX, phase, start, empty }) => {
+    const { engine, scene } = (window as unknown as { __UPRISING__: { engine: GameEngine; scene: GameScene } }).__UPRISING__;
+    const tick = (input = empty, dt = 1 / 60) => { engine.update(dt, input); scene.update(engine.world, dt); };
+    if (start === 'restart') {
+      engine.restart(); engine.world.loadout.weapon = weapon; engine.world.props = []; engine.world.enemies = []; engine.world.effects = []; engine.world.messageTime = 0;
+      Object.assign(engine.world.player, { x: 0, y: 0, z: 0, vx: 0, vy: 0, facing: 1, invulnerable: 0 });
+      for (let i = 0; i < 20; i++) tick();
+    }
+    const p = engine.world.player;
+    engine.world.hitstop = 0;
+    if (start === 'next') while (p.state === 'attack') tick();
+    if (start !== 'continue') tick({ ...empty, attack: true, moveX });
+    const { startup, active, recovery } = p.attack!.move!.frames;
+    const frame = { windup: startup * .6, strike: startup + active / 2, fire: startup + 2, follow: startup + active + recovery * .35 }[phase]!;
+    while (p.state === 'attack' && p.attack!.elapsed * 60 < frame - 1e-6) tick(empty, Math.min(1 / 60, frame / 60 - p.attack!.elapsed));
+    engine.world.hitstop = 100; engine.world.effects = []; engine.world.messageTime = 0; scene.update(engine.world, 1 / 60);
+    // Review aid only: zoom the orthographic camera onto the player (scene.resize() restores it).
+    const view = (scene as unknown as { view: { camera: { orthographicSize: number }; worldToScreen: (p: { x: number; y: number; z: number }) => { x: number; y: number } | null } }).view;
+    view.camera.orthographicSize = 5;
+    const rect = document.querySelector('#scene canvas')!.getBoundingClientRect();
+    // Frame the body and both ends of the weapon, with a margin.
+    const { tip, pivot } = scene.combatGeometry(p.id);
+    const points = [{ x: -1.2, y: -.3, z: 0 }, { x: 1.2, y: 2.9, z: 0 }, tip!, pivot!].map(q => view.worldToScreen(q)!);
+    const xs = points.map(q => rect.left + q.x), ys = points.map(q => rect.top + q.y);
+    const x = Math.max(0, Math.min(...xs) - 60), y = Math.max(0, Math.min(...ys) - 60);
+    return { state: p.state, combo: p.attack?.combo, clip: { x, y, width: Math.min(innerWidth, Math.max(...xs) + 60) - x, height: Math.min(innerHeight, Math.max(...ys) + 60) - y } };
+  }, { weapon, moveX, phase, start, empty: EMPTY_INPUT });
+  for (const weapon of ['arc', 'pile', 'razor', 'lance', 'cannon', 'scythe'] as const) {
+    const phases = weapon === 'cannon' ? ['windup', 'fire'] : ['windup', 'strike', 'follow'];
+    for (const [index, phase] of phases.entries()) {
+      const frozen = await freeze(weapon, weapon === 'cannon' ? 0 : 1, phase, index ? 'continue' : 'restart');
+      expect(frozen.state, `${weapon} ${phase} is mid-attack`).toBe('attack');
+      await page.screenshot({ path: `test-results/screenshots/weapon-${weapon}-${index + 1}-${phase}.png`, clip: frozen.clip });
+    }
+  }
+  // The three jab stages share hit frames but wind up differently (level, rising, overhead).
+  for (const stage of [0, 1, 2]) {
+    const frozen = await freeze('arc', 0, 'windup', stage ? 'next' : 'restart');
+    expect([frozen.state, frozen.combo], `arc jab ${stage + 1} wind-up`).toEqual(['attack', stage]);
+    await page.screenshot({ path: `test-results/screenshots/weapon-arc-jab${stage + 1}-windup.png`, clip: frozen.clip });
+  }
+  await page.evaluate(() => (window as unknown as { __UPRISING__: { scene: GameScene } }).__UPRISING__.scene.resize());
   await expectRenderedArena(page); expect(errors).toEqual([]);
 });
