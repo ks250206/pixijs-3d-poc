@@ -1043,7 +1043,8 @@ export class GameEngine {
               const dx = bounceTarget.x - shot.x, dz = bounceTarget.z - shot.z, distance = Math.hypot(dx, dz) || 1;
               data.bounces = (data.bounces ?? 0) - 1; data.pierce = Math.max(1, data.pierce); data.facing = dx >= 0 ? 1 : -1;
               shot.vx = dx / distance * 14; shot.vz = dz / distance * 14; shot.vy = clamp((bounceTarget.y + .9 - shot.y) / distance * 14, -4, 4);
-              shot.life = Math.min(1.2, shot.life + .3);
+              // Give the chosen target enough travel time even when the first hit was at maximum range.
+              shot.life = Math.min(1.2, Math.max(shot.life + .3, distance / 14 + .1));
               this.effect('hit', shot.x, shot.y, shot.z, .2, .8, shot.color);
               break;
             }

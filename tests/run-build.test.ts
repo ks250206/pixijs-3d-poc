@@ -175,6 +175,17 @@ describe('six weapon upgrades change actual combat', () => {
     expect(damage(false)).toBe(0); expect(damage(true)).toBeGreaterThan(0);
   });
 
+  it('gives a ricochet enough time to reach its selected target after a maximum-range first hit', () => {
+    const g = lab('cannon', 'cannon-bounce');
+    g.world.player.z = -2.5;
+    Object.assign(g.world.enemies[0]!, { x: 9.6, z: -2.5 });
+    Object.assign(g.world.enemies[1]!, { x: 8.9, z: 3.4 });
+    g.update(1 / 60, { ...EMPTY_INPUT, attack: true }); tick(g, 100);
+    expect(g.world.enemies[0]!.damage).toBeGreaterThan(0);
+    expect(g.world.enemies[1]!.damage).toBeGreaterThan(0);
+    expect(g.world.projectiles).toHaveLength(0);
+  });
+
   it('triggers the scythe finisher after two enemies, and never on one target', () => {
     const damage = (upgrade: boolean, count: number) => {
       const g = lab('scythe', upgrade ? 'scythe-chain' : undefined);
