@@ -3,15 +3,7 @@ import { generateMap, availableNodes } from '../src/game/roguelite/map';
 import { GameEngine } from '../src/game/engine';
 import { createCandidates } from '../src/game/loadouts';
 
-export function clearEncounter(g: GameEngine): void {
-  // Controlled ring-out fixture: exercise real wave-completion, not player AI balance.
-  for (let i = 0; i < 900 && g.run?.phase === 'combat'; i++) {
-    g.world.player.invulnerable = 100;
-    for (const e of g.world.enemies) e.x = g.world.arenaMax + 8;
-    g.update(1/60);
-  }
-  expect(g.run?.phase).toBe('reward');
-}
+import { clearEncounter } from './helpers/roguelite';
 describe('procedural routes', () => {
   it('satisfies reachability and choice invariants for 1000 seeds', () => {
     for (let seed = 0; seed < 1000; seed++) {

@@ -1,3 +1,4 @@
+import { eliteModifiers, relicEffect, createShop, RELICS, type RelicId, type EliteModifier } from './roguelite/economy';
 import { createRun, availableNodes, encounterRoster, nodeSeed, type RunState, type MapNode } from './roguelite/map';
 import { EncounterDirector, emptyCoordination } from './director';
 import { ActionBuffer } from './action-buffer';
@@ -88,6 +89,7 @@ export class GameEngine {
   world: WorldState;
   run: RunState | null = null;
   private encounter: ActorKind[] = [];
+  private modifiers: EliteModifier[] = [];
   private memories = new Map<string, ActorMemory>();
   private shots = new Map<string, ProjectileMemory>();
   private random: () => number;
@@ -119,7 +121,7 @@ export class GameEngine {
   }
 
   start(loadout: Loadout, mode: GameMode = 'campaign'): void {
-    this.run = null;
+    this.run = null; this.modifiers = [];
     const seed = this.world.seed;
     this.startingLoadout = structuredClone(loadout);
     this.random = seededRandom(seed ^ 0x1f842b);
@@ -165,14 +167,17 @@ export class GameEngine {
     const node = r.map.find(n => n.id === r.selected)!;
     r.current = node.id; r.visited.push(node.id); r.selected = null;
     if (['battle', 'elite', 'boss'].includes(node.kind)) this.beginEncounter(node);
-    else { r.phase = 'node'; this.world.phase = 'sector-clear'; }
+    else { r.phase = 'node'; this.world.phase = 'sector-clear'; if (node.kind === 'shop') r.economy.shops[node.id] ??= createShop(r, node); }
     return true;
   }
 
   private beginEncounter(node: MapNode): void {
     const w = this.world, r = this.run!;
     r.phase = 'combat';
+    this.modifiers = eliteModifiers(r, node);
     this.encounter = encounterRoster(r, node);
+    if (this.modifiers.includes('commander')) this.encounter = ['captain', 'sentinel', 'rider', ...this.encounter.slice(0, 3)];
+    if (this.modifiers.includes('swarm')) this.encounter.push(...Array.from({length: Math.ceil(this.encounter.length / 2)}, () => 'minion' as const));
     this.random = seededRandom(nodeSeed(r.seed, `combat:${node.id}`));
     this.memories.clear(); this.shots.clear(); this.actions.reset(); this.director.reset();
     this.upgradeBursts = []; this.comboAge = 0; this.sectorCleared = false;
@@ -195,7 +200,7 @@ export class GameEngine {
 
   completeNode(): boolean {
     const r = this.run;
-    if (!r || !r.current || !['node', 'reward'].includes(r.phase) || r.completed.includes(r.current)) return false;
+    if (!r || !r.current || !['node', 'reward'].includes(r.phase) || r.completed.includes(r.current) || r.phase === 'reward' && !this.world.upgradeClaimed) return false;
     const node = r.map.find(n => n.id === r.current)!;
     r.completed.push(node.id); this.syncRunResources();
     if (node.kind === 'boss') {
@@ -204,6 +209,61 @@ export class GameEngine {
     }
     r.phase = 'map'; this.world.phase = 'sector-clear';
     return true;
+  }
+
+  skipUpgrade(): boolean {
+    if (!this.run || this.run.phase !== 'reward' || this.world.upgradeClaimed) return false;
+    this.world.upgradeClaimed = true; return true;
+  }
+
+  private applyUpgrade(id: UpgradeId): boolean {
+    const w = this.world, definition = getUpgradeDefinition(id);
+    if (!definition || definition.weapon !== 'all' && definition.weapon !== w.loadout.weapon || upgradeRank(w.upgrades, id) >= definition.maxRank) return false;
+    const existing = w.upgrades.find(u => u.id === id);
+    if (existing) existing.rank++; else w.upgrades.push({id, rank: 1});
+    if (id === 'weapon-tune') w.loadout.modules.weapon = w.loadout.modules.weapon === 'quick' ? 'breaker' : 'quick';
+    if (id === 'neutral-tune') w.loadout.modules.neutral = w.loadout.modules.neutral === 'focused' ? 'split' : 'focused';
+    if (id === 'side-tune') w.loadout.modules.side = w.loadout.modules.side === 'cross' ? 'push' : 'cross';
+    return true;
+  }
+
+  private grantRelic(id: RelicId): boolean {
+    const r = this.run, w = this.world;
+    if (!r || r.economy.relics.includes(id) || id === 'reserve' && w.stocks >= 4) return false;
+    r.economy.relics.push(id);
+    if (id === 'reserve') w.stocks++;
+    return true;
+  }
+
+  buyStock(id: string): boolean {
+    const r = this.run, w = this.world;
+    if (!r || r.phase !== 'node' || !r.current) return false;
+    const stock = r.economy.shops[r.current]?.find(item => item.id === id);
+    if (!stock || stock.sold || r.economy.scrap < stock.price) return false;
+    let applied = false;
+    if (stock.kind === 'upgrade' && stock.upgrade) applied = this.applyUpgrade(stock.upgrade);
+    if (stock.kind === 'repair' && w.player.damage > 0) { w.player.damage = Math.max(0,w.player.damage - 40); applied = true; }
+    if (stock.kind === 'stock' && w.stocks < 4) { w.stocks++; applied = true; }
+    if (stock.kind === 'relic' && stock.relic) applied = this.grantRelic(stock.relic);
+    if (!applied) return false;
+    stock.sold = true; r.economy.scrap -= stock.price; this.syncRunResources(); return true;
+  }
+
+  claimNodeBenefit(choice: 'treasure' | 'repair' | 'upgrade'): boolean {
+    const r = this.run, w = this.world;
+    if (!r || r.phase !== 'node' || !r.current || r.economy.nodeClaims.includes(r.current)) return false;
+    const node = r.map.find(n => n.id === r.current)!;
+    if (node.kind === 'treasure' && choice === 'treasure') {
+      const available = RELICS.filter(v => !r.economy.relics.includes(v.id) && (v.id !== 'reserve' || w.stocks < 4));
+      const relic = available[nodeSeed(r.seed,`treasure:${node.id}`) % available.length];
+      if (relic) this.grantRelic(relic.id); else r.economy.scrap += 30; // Explicit full-pool fallback.
+      r.economy.scrap += 20 + (r.economy.relics.includes('magnet') ? 20 : 0);
+    } else if (node.kind === 'rest' && choice === 'repair' && w.player.damage > 0) w.player.damage = Math.max(0, w.player.damage - 50);
+    else if (node.kind === 'rest' && choice === 'upgrade') {
+      const upgrade = createUpgradeChoices(nodeSeed(r.seed,'rest'), nodeSeed(0,node.id), w.loadout,w.upgrades)[0];
+      if (upgrade) this.applyUpgrade(upgrade.id); else r.economy.scrap += 20;
+    } else return false;
+    r.economy.nodeClaims.push(node.id); this.syncRunResources(); return true;
   }
 
   pause(): void {
@@ -232,15 +292,10 @@ export class GameEngine {
 
   claimUpgrade(id: UpgradeId): boolean {
     const w = this.world;
-    if (w.mode !== 'campaign' || w.upgradeClaimed || !(w.phase === 'sector-clear' || w.phase === 'paused' && this.sectorCleared)) return false;
+    if ((w.mode !== 'campaign' && !(this.run?.phase === 'reward')) || w.upgradeClaimed || !(w.phase === 'sector-clear' || w.phase === 'paused' && this.sectorCleared)) return false;
     const choice = w.upgradeChoices.find((entry) => entry.id === id);
     if (!choice || upgradeRank(w.upgrades, id) >= choice.maxRank) return false;
-    const existing = w.upgrades.find((entry) => entry.id === id);
-    if (existing) existing.rank++;
-    else w.upgrades.push({ id, rank: 1 });
-    if (id === 'weapon-tune') w.loadout.modules.weapon = w.loadout.modules.weapon === 'quick' ? 'breaker' : 'quick';
-    if (id === 'neutral-tune') w.loadout.modules.neutral = w.loadout.modules.neutral === 'focused' ? 'split' : 'focused';
-    if (id === 'side-tune') w.loadout.modules.side = w.loadout.modules.side === 'cross' ? 'push' : 'cross';
+    if (!this.applyUpgrade(id)) return false;
     w.upgradeClaimed = true;
     w.message = `BUILD UPDATED // ${getUpgradeDefinition(id).name}`; w.messageTime = 3;
     return true;
@@ -308,7 +363,7 @@ export class GameEngine {
       return;
     }
     const dt = realDt;
-    w.specialCooldown = Math.max(0, w.specialCooldown - dt);
+    w.specialCooldown = Math.max(0, w.specialCooldown - dt * relicEffect(this.run?.economy.relics ?? [], 'recovery'));
     this.updateUpgradeBursts(dt);
     this.updatePendingSpawns(dt);
     this.comboAge += dt;
@@ -389,6 +444,7 @@ export class GameEngine {
       bossPhase: kind === 'boss' ? 'armored' : null, phaseChanges: 0, tactic: '',
       attack: null, telegraph: 0, aim: null,
     };
+    if (kind !== 'player' && (this.modifiers.includes('armor') || this.modifiers.includes('commander'))) { actor.armor *= 1.4; actor.guard *= 1.4; actor.mount *= 1.4; }
     this.resetMemory(actor);
     return actor;
   }
@@ -547,12 +603,12 @@ export class GameEngine {
     const ordinaryAerial = !ground && p.state === 'attack' && p.attack?.kind === 'aerial';
     if ((!free && !ordinaryAerial) || p.state === 'airdodge' || p.state === 'dodge') return;
     if (ground && Math.abs(input.moveX) > 0.15) p.facing = input.moveX > 0 ? 1 : -1;
-    const speed = (m.dashTimer > 0 ? 10.4 : 6.2) * w.loadout.speed * this.upgradeMovementScale();
+    const speed = (m.dashTimer > 0 ? 10.4 : 6.2) * w.loadout.speed * this.upgradeMovementScale() * relicEffect(this.run?.economy.relics ?? [], 'movement');
     const sliding = p.state === 'wavedash';
     const targetX = input.moveX * speed;
     if (!sliding) p.vx = approach(p.vx, targetX, dt * (ground ? 46 : 17));
     else if (Math.abs(input.moveX) > 0.1 && Math.sign(input.moveX) !== Math.sign(p.vx)) p.vx = approach(p.vx, targetX, dt * 24);
-    p.vz = approach(p.vz, input.moveZ * 4.4 * w.loadout.speed * this.upgradeMovementScale(), dt * (ground ? 35 : 14));
+    p.vz = approach(p.vz, input.moveZ * 4.4 * w.loadout.speed * this.upgradeMovementScale() * relicEffect(this.run?.economy.relics ?? [], 'movement'), dt * (ground ? 35 : 14));
     if (!sliding && !ordinaryAerial) p.state = !ground ? p.vy > 0 ? 'jump' : 'fall' : Math.hypot(p.vx, p.vz) > 0.4 ? 'run' : 'idle';
     if (!ground && input.moveZ > 0.65 && p.vy < 0) p.vy = Math.max(-22, p.vy - dt * 55);
   }
@@ -844,7 +900,7 @@ export class GameEngine {
     const rush = enemy.kind === 'charger' || enemy.kind === 'drone' || mounted;
     const reach = boss ? 3.4 : enemy.kind === 'sniper' ? 12 : enemy.kind === 'sapper' ? 5 : enemy.kind === 'artillery' ? 10 : enemy.kind === 'captain' ? 4.5 : ranged ? 6.8 : rush ? 5.5 : enemy.kind === 'leaper' ? 4.8 : 2;
     const speed = mounted ? 4.4 : enemy.kind === 'minion' ? 4.1 : enemy.kind === 'artillery' ? 1.6 : enemy.kind === 'bruiser' ? 2 : boss ? 1.65 : enemy.kind === 'sentinel' ? 2.2 : enemy.kind === 'scout' ? 3.8 : 3.1;
-    return { boss, ranged, mounted, rush, reach, speed };
+    return { boss, ranged, mounted, rush, reach, speed: speed * (this.modifiers.includes('haste') || this.modifiers.includes('berserk') && enemy.damage >= 60 ? 1.25 : 1) };
   }
 
   /** This same gate feeds arbitration and execution: unavailable roles cannot block ready actors. */
@@ -1127,6 +1183,14 @@ export class GameEngine {
     if (!target.alive || target.invulnerable > 0) return false;
     if (target.kind === 'player') this.actions.reset();
     const w = this.world, m = this.memory(target);
+    // One damage boundary for melee, shots and floor hazards. Never pre-scale emitters.
+    if (this.run) {
+      if (target.kind === 'player') {
+        const enemySource = w.enemies.some(e => e.id === source.id);
+        damage *= relicEffect(this.run.economy.relics, 'incoming') * (enemySource && (this.modifiers.includes('damage') || this.modifiers.includes('berserk') && source.damage >= 60) ? 1.25 : 1);
+        force *= relicEffect(this.run.economy.relics, 'force');
+      } else if (source.kind === 'player') damage *= relicEffect(this.run.economy.relics, 'damage');
+    }
     if (m.grabTarget) this.releaseGrab(target);
     const guarding = target.kind === 'sentinel' && target.guard > 0 && target.state !== 'attack' && target.state !== 'hurt' && target.state !== 'grabbed';
     if (target.mount > 0) {
@@ -1525,7 +1589,16 @@ export class GameEngine {
     const w = this.world;
     if (this.run) {
       if (this.run.phase !== 'combat') return;
-      this.run.phase = 'reward'; this.syncRunResources();
+      this.run.phase = 'reward';
+      const r = this.run, node = r.map.find(n => n.id === r.current)!;
+      if (!r.economy.rewards.includes(node.id)) {
+        r.economy.rewards.push(node.id);
+        r.economy.scrap += Math.round((node.kind === 'boss' ? 90 : node.kind === 'elite' ? 60 : 30) * relicEffect(r.economy.relics, 'reward'));
+        if (r.economy.relics.includes('solder')) w.player.damage = Math.max(0,w.player.damage - 15);
+      }
+      w.upgradeChoices = createUpgradeChoices(nodeSeed(r.seed,'reward'), nodeSeed(0,node.id),w.loadout,w.upgrades);
+      w.upgradeClaimed = w.upgradeChoices.length === 0;
+      this.syncRunResources();
       w.phase = 'sector-clear'; w.projectiles = []; w.hazards = [];
       return;
     }
