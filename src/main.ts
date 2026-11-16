@@ -62,6 +62,12 @@ async function main() {
     ui.showCandidates(candidates);
   }
 
+  function resetInputAndFocus() {
+    input.releaseAll();
+    pending = { ...EMPTY_INPUT };
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  }
+
   ui = new GameUI(uiHost, {
     start,
     preview: (loadout) => { if (engine.world.phase === 'ready') engine.world.loadout = loadout; },
@@ -71,7 +77,7 @@ async function main() {
       return candidates;
     },
     pause: () => { engine.pause(); input.releaseAll(); pending = { ...EMPTY_INPUT }; },
-    resume: () => { engine.resume(); input.releaseAll(); pending = { ...EMPTY_INPUT }; if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); },
+    resume: () => { engine.resume(); resetInputAndFocus(); },
     restart: () => { input.releaseAll(); pending = { ...EMPTY_INPUT }; engine.restart(); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); },
     newRun,
     toggleHitboxes: () => scene.toggleHitboxes(),
@@ -127,7 +133,10 @@ async function main() {
     let steps = 0;
     while (accumulated >= 1 / 60 && steps++ < 6) {
       if (pending.pause && ui.handlePauseInput()) pending.pause = false;
+      const wasPaused = engine.world.phase === 'paused';
       engine.update(1 / 60, pending);
+      // Escape/START can resume before the HUD has rendered its pause dialog.
+      if (wasPaused && (engine.world.phase === 'playing' || engine.world.phase === 'sector-clear')) resetInputAndFocus();
       audio.update(engine.world);
       // The simulation owns buffering, including hitstop; never resubmit an edge.
       pending = clearInputEdges(pending);

@@ -378,10 +378,22 @@ test('keyboard movement, jumping, charging, pausing and recovery work in the ren
   await expect.poll(async () => (await snapshot(page)).phase).toBe('playing');
   // Isolate focus from the preceding special's recovery and the five-frame action buffer.
   await expect.poll(async () => (await snapshot(page)).player.state).toBe('idle');
-  await page.locator('.top-actions [data-action=pause]').click();
-  await expect.poll(async () => (await snapshot(page)).phase).toBe('paused');
-  await page.keyboard.press('Escape');
+  // Pause and press Escape within one browser turn, before the HUD can render
+  // its dialog. This must restore gameplay focus even on a slow renderer.
+  const quickPause = await page.evaluate(() => {
+    const button = document.querySelector<HTMLButtonElement>('.top-actions [data-action=pause]')!;
+    button.focus();
+    button.click();
+    const phase = (window as unknown as { __UPRISING__: { engine: GameEngine } }).__UPRISING__.engine.world.phase;
+    const hasDialog = !!document.querySelector('.game-ui.has-modal');
+    for (const type of ['keydown', 'keyup']) {
+      button.dispatchEvent(new KeyboardEvent(type, { key: 'Escape', code: 'Escape', bubbles: true }));
+    }
+    return { phase, hasDialog };
+  });
+  expect(quickPause).toEqual({ phase: 'paused', hasDialog: false });
   await expect.poll(async () => (await snapshot(page)).phase).toBe('playing');
+  await expect(page.locator('.top-actions [data-action=pause]')).not.toBeFocused();
   await page.keyboard.down('Space');
   await expect.poll(async () => (await snapshot(page)).player.y, { intervals: [30, 50, 80] }).toBeGreaterThan(0.15);
   await page.keyboard.up('Space');
