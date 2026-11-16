@@ -3,7 +3,7 @@ import type { RunState, Resources } from "./map";
 import { availableNodes } from "./map";
 import { EVENTS } from "./events";
 import { RELICS } from "./economy";
-import { UPGRADE_DEFINITIONS, type UpgradeId } from "../upgrades";
+import { UPGRADE_DEFINITIONS } from "../upgrades";
 
 export const SAVE_KEY = "null-uprising-run";
 export const SAVE_VERSION = 1;

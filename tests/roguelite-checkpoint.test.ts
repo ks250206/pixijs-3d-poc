@@ -174,7 +174,7 @@ describe("versioned transaction checkpoints", () => {
     expect(ok.s.getItem(SAVE_KEY)).toBe(previous);
   });
   it("finished/dead/abandoned checkpoints cannot continue; failed load keeps corrupt bytes", () => {
-    const { s, g, save } = setup();
+    const { s, save } = setup();
     save.abandon();
     expect(readCheckpoint(s).kind).toBe("finished");
     expect(save.resume()).toBe(false);
