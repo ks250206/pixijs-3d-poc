@@ -51,3 +51,9 @@ test('shop purchase and treasure are once-only through the run UI', async ({page
   await page.locator('[data-benefit=treasure]').click();await expect(page.locator('[data-benefit=treasure]')).toBeDisabled();
   expect(await page.evaluate(()=>window.__UPRISING__.engine.run!.economy.relics.length)).toBe(1);
 });
+test('event shows validated choices and a stable selected result',async({page})=>{
+ await boot(page);await page.evaluate(()=>{const g=window.__UPRISING__.engine,r=g.run!;r.map[0]!.kind='unknown';r.events.resolved['1-0-0']={kind:'event',eventId:'foundry-union'};g.selectNode('1-0-0');g.travelNode();});
+ await expect(page.locator('[data-event=fund]')).toBeDisabled();await page.locator('[data-event=salvage]').click();
+ await expect(page.locator('.rogue-detail [role=status]')).toContainText('SCRAP 0 → 30');await expect(page.locator('[data-event]')).toHaveCount(0);
+ await page.locator('[data-rogue=complete]').click();await expect(page.locator('[data-rogue=travel]')).toBeVisible();
+});

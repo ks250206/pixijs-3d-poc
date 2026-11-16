@@ -35,6 +35,7 @@ describe('procedural routes', () => {
     for (let i = 0; i < 24; i++) {
       expect(g.selectNode(availableNodes(g.run!)[0]!)).toBe(true); expect(g.travelNode()).toBe(true);
       if (g.run!.phase === 'combat') clearEncounter(g);
+      if (g.run!.events.resolved[g.run!.current!]?.kind === 'event') g.chooseEvent('leave');
       expect(g.completeNode()).toBe(true); expect(g.completeNode()).toBe(false);
       expect(g.world.phase).toBe(i === 23 ? 'won' : 'sector-clear');
     }
