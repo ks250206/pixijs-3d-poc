@@ -1,3 +1,4 @@
+import { createRun, availableNodes, encounterRoster, nodeSeed, type RunState, type MapNode } from './roguelite/map';
 import { EncounterDirector, emptyCoordination } from './director';
 import { ActionBuffer } from './action-buffer';
 import { createObjective, objectiveProps } from './objectives';
@@ -85,6 +86,8 @@ interface ProjectileMemory {
 /** Pure simulation: rendering, audio and input devices are independent adapters. */
 export class GameEngine {
   world: WorldState;
+  run: RunState | null = null;
+  private encounter: ActorKind[] = [];
   private memories = new Map<string, ActorMemory>();
   private shots = new Map<string, ProjectileMemory>();
   private random: () => number;
@@ -116,6 +119,7 @@ export class GameEngine {
   }
 
   start(loadout: Loadout, mode: GameMode = 'campaign'): void {
+    this.run = null;
     const seed = this.world.seed;
     this.startingLoadout = structuredClone(loadout);
     this.random = seededRandom(seed ^ 0x1f842b);
@@ -138,10 +142,68 @@ export class GameEngine {
       shake: 0, hitstop: 0, specialCooldown: 0, recoveryAvailable: true, waveTimer: 0,
       cameraX: 0, arenaMin: -ARENA_HALF_WIDTH, arenaMax: ARENA_HALF_WIDTH, events: [],
     };
+    if (mode === 'roguelite') {
+      this.run = createRun(seed, loadout);
+      this.world.phase = 'sector-clear';
+      this.world.enemies = []; this.world.props = [];
+      return;
+    }
     this.world.props.push(...objectiveProps(0, this.world.objective));
     player.invulnerable = 1.8;
     this.spawnWave();
     this.effect('spawn', player.x, 0, player.z, 0.8, 2.2, loadout.color);
+  }
+
+  selectNode(id: string): boolean {
+    if (!this.run || !availableNodes(this.run).includes(id)) return false;
+    this.run.selected = id; return true;
+  }
+
+  travelNode(): boolean {
+    const r = this.run;
+    if (!r || !r.selected || !availableNodes(r).includes(r.selected)) return false;
+    const node = r.map.find(n => n.id === r.selected)!;
+    r.current = node.id; r.visited.push(node.id); r.selected = null;
+    if (['battle', 'elite', 'boss'].includes(node.kind)) this.beginEncounter(node);
+    else { r.phase = 'node'; this.world.phase = 'sector-clear'; }
+    return true;
+  }
+
+  private beginEncounter(node: MapNode): void {
+    const w = this.world, r = this.run!;
+    r.phase = 'combat';
+    this.encounter = encounterRoster(r, node);
+    this.random = seededRandom(nodeSeed(r.seed, `combat:${node.id}`));
+    this.memories.clear(); this.shots.clear(); this.actions.reset(); this.director.reset();
+    this.upgradeBursts = []; this.comboAge = 0; this.sectorCleared = false;
+    w.sector = node.theme; w.wave = 1; w.waveTimer = 0; w.hitstop = 0; w.specialCooldown = 0;
+    w.arenaMin = node.theme * SECTOR_SPAN - ARENA_HALF_WIDTH; w.arenaMax = node.theme * SECTOR_SPAN + ARENA_HALF_WIDTH; w.cameraX = node.theme * SECTOR_SPAN;
+    w.player = this.makeActor('player', w.cameraX - 5, 0); w.player.damage = r.resources.damage; w.player.invulnerable = 1.8;
+    w.stocks = r.resources.stocks; w.loadout = structuredClone(r.resources.loadout); w.upgrades = structuredClone(r.resources.upgrades);
+    w.enemies = []; w.projectiles = []; w.hazards = []; w.effects = []; w.pendingSpawns = [];
+    w.objective = createObjective(node.theme, 'training'); w.objective.label = `ACT ${node.act} / ${node.kind.toUpperCase()} — 単発遭遇`;
+    w.props = createArena(node.theme).map(prop => ({ ...prop, id: `${node.id}:${prop.id}` })); w.coordination = emptyCoordination();
+    w.upgradeChoices = []; w.upgradeClaimed = false; w.phase = 'playing';
+    this.spawnWave();
+  }
+
+  private syncRunResources(): void {
+    if (!this.run) return;
+    const w = this.world;
+    this.run.resources = { damage: w.player.damage, stocks: w.stocks, loadout: structuredClone(w.loadout), upgrades: structuredClone(w.upgrades), score: w.score, kills: w.kills };
+  }
+
+  completeNode(): boolean {
+    const r = this.run;
+    if (!r || !r.current || !['node', 'reward'].includes(r.phase) || r.completed.includes(r.current)) return false;
+    const node = r.map.find(n => n.id === r.current)!;
+    r.completed.push(node.id); this.syncRunResources();
+    if (node.kind === 'boss') {
+      if (r.act === 3) { r.phase = 'finished'; this.world.phase = 'won'; return true; }
+      r.act++;
+    }
+    r.phase = 'map'; this.world.phase = 'sector-clear';
+    return true;
   }
 
   pause(): void {
@@ -186,7 +248,7 @@ export class GameEngine {
 
   nextSector(): void {
     const w = this.world;
-    if (w.phase !== 'sector-clear' || w.sector >= STAGES.length - 1) return;
+    if (this.run || w.phase !== 'sector-clear' || w.sector >= STAGES.length - 1) return;
     if (w.upgradeChoices.length && !w.upgradeClaimed) return;
     if (!w.supplyClaimed) this.claimSupply(w.player.damage > 0 ? 'repair' : 'power');
     w.sector++;
@@ -225,6 +287,7 @@ export class GameEngine {
   update(delta: number, input: InputFrame = EMPTY_INPUT): void {
     const w = this.world;
     w.events = [];
+    if (this.run && this.run.phase !== 'combat') { this.actions.reset(); return; }
     const realDt = clamp(delta, 0, 0.05);
     if (input.pause) {
       if (w.phase === 'paused') this.resume(); else this.pause();
@@ -1317,7 +1380,7 @@ export class GameEngine {
         w.player.damage = Math.max(0, w.player.damage - 10);
         this.effect('heal', w.player.x, 1, w.player.z, 0.7, 2, w.loadout.color, '-10%');
       }
-      if (actor.kind === 'boss') {
+      if (actor.kind === 'boss' && !this.run) {
         w.completedSectors = STAGES.length; w.phase = 'won'; w.message = 'DIRECTIVE BROKEN'; w.messageTime = 99;
         w.score += w.stocks * 500;
         w.events.push({ type: 'win' });
@@ -1383,8 +1446,8 @@ export class GameEngine {
     const w = this.world;
     w.waveTimer = 0;
     this.director.reset(); w.coordination = emptyCoordination();
-    const kinds = w.mode === 'training' ? TRAINING_WAVES[(w.wave - 1) % TRAINING_WAVES.length]! : STAGES[w.sector]!.waves[w.wave - 1]!.enemies;
-    const staged = w.mode === 'campaign' && kinds.length >= 6;
+    const kinds = this.run ? this.encounter : w.mode === 'training' ? TRAINING_WAVES[(w.wave - 1) % TRAINING_WAVES.length]! : STAGES[w.sector]!.waves[w.wave - 1]!.enemies;
+    const staged = w.mode !== 'training' && kinds.length >= 6;
     for (let index = 0; index < kinds.length; index++) {
       const kind = kinds[index]!;
       const batch = Math.floor(index / 4), side = batch % 2 ? -1 : 1;
@@ -1460,6 +1523,12 @@ export class GameEngine {
 
   private completeWave(): void {
     const w = this.world;
+    if (this.run) {
+      if (this.run.phase !== 'combat') return;
+      this.run.phase = 'reward'; this.syncRunResources();
+      w.phase = 'sector-clear'; w.projectiles = []; w.hazards = [];
+      return;
+    }
     if (w.mode === 'training') {
       w.wave++;
       w.player.damage = 0;

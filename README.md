@@ -291,3 +291,7 @@ Viteの`base`は`/pixijs-3d-poc/`。別のリポジトリ名へ移す場合は `
 - [PixiJS 3D — 公式ガイド](https://pixijs.com/3d/guides/getting-started/quick-start)
 - [PixiJS 3D — インストールとバックエンド](https://pixijs.com/3d/guides/getting-started/installation)
 - [Vite+ — 公式ドキュメント](https://www.viteplus.dev/guide/)
+
+## Roguelite mode
+
+Choose **ROGUELITE** alongside the classic campaign and training. A seeded three-Act route offers branching battles, elites and safe stops. Select a node to inspect it, then choose **TRAVEL**. Intermediate Wardens guard Acts 1–2; the Architect guards Act 3. See [roguelite design and integration notes](docs/roguelite-design.md) for the stack scope, simulation contract and validation limits.
