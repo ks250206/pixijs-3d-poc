@@ -123,6 +123,9 @@ async function continueRun(page: import("@playwright/test").Page) {
 }
 for (const width of [1200, 390])
   test(`route/shop/event screenshots and transactional refresh at ${width}px`, async ({ page }) => {
+    // Three reloads and three full-page captures at desktop size: under CI's software WebGL this
+    // sits right at the default per-test limit (2.0–2.1 min), so it gets the slow-test allowance.
+    test.slow(width === 1200);
     await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
     await boot(page);
     if (width === 1200) {
