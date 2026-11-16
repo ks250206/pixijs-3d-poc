@@ -739,7 +739,7 @@ export class GameScene {
       const a = new Vector3(0, -.5, 0).applyMatrix4(matrix), b = new Vector3(0, .5, 0).applyMatrix4(matrix);
       return { a: { x: a.x, y: a.y, z: a.z }, b: { x: b.x, y: b.y, z: b.z } };
     };
-    return { tip: this.weaponTip(actorId), trail: endpoints(this.actors.get(actorId)?.slash), overlay: endpoints(this.debugSegments.get(actorId)) };
+    return { tip: this.weaponTip(actorId), pivot: this.actors.get(actorId)?.robot.weaponView?.pivotWorld() ?? null, trail: endpoints(this.actors.get(actorId)?.slash), overlay: endpoints(this.debugSegments.get(actorId)) };
   }
 
   private updateCombatDebug(world: WorldState): void {

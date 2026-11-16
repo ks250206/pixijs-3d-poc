@@ -1,5 +1,46 @@
 # Verification record
 
+## Weapon animation: authored wind-up, strike and follow-through
+
+Baseline: `feat/motion-foundation` **`9d2edb4`** (the jointed skeleton below, on the roguelite route map stack). The change authors each weapon's wind-up (予備動作) and follow-through (振り抜き) around the unchanged strike arc (`src/game/combat/trajectory.ts`), gives the player one always-visible weapon model that the hands always hold (`src/render/armory.ts`, `WeaponView`, `RigFrame.held`), and replaces the attack body poses derived from `attackMotion` with per-weapon choreography: trunk turn, weight transfer, lunge step and rebound (`src/render/rig/choreography.ts`). Hit frames, timing, cancels and move data are unchanged. See [Weapon trajectory and body motion](combat-architecture.md#weapon-trajectory-and-body-motion).
+
+Environment: unchanged from the previous record (Node 26.13.1, Vite+ 1.6.0, Pixi 8.23.0 / `@pixi/3d` 0.1.0). No dependency changed.
+
+### Local verification
+
+- TypeScript: passed.
+- Logic: all 400 tests pass. The 334 tests of the previous record still pass; `tests/weapon-trajectory.test.ts` adds 17, `tests/choreography.test.ts` adds 11, and `tests/rig-animator.test.ts` grows from 41 to 79 for the always-held weapon.
+- Lint: passed with no warnings.
+- Production build: passed.
+- Playwright: all 33 cases pass against the production build in local Chromium (SwiftShader), with no retries: the 32 previous cases plus the new weapon case.
+- `git diff --check`: passed.
+
+### Regression coverage
+
+- Unchanged hits: a golden test keeps a frozen copy of the previous `sampleWeapon` and requires the new one to be bit-identical (`Object.is` on every coordinate) on integer and fractional frames of the hit window, for six weapons × both modules × jab stages, tilt, smash (uncharged and charged), dash and aerial × five directions (480 moves), every special slot, enemy and utility moves, and 400 seeded random moves, at both facings. `sweptContact` results match an oracle built on the frozen sampler, including a tick landing a rounding error past the last hit frame.
+- Trajectory continuity and endpoints: approaching the hit window from either side meets its endpoints within 1e-4; frame 0 and every frame from the end of the move on are the `WEAPON_REST` pose at natural length; every frame is finite and facing mirrors X only.
+- Shape per trajectory: slashes swing behind before the arc and carry on past it; the pile rises overhead and ends lower than its last hit frame; thrusts are drawn back shorter than their carry; the scythe winds back against its spin; vertical strikes swing onto their line; back attacks move the pivot behind and return it; the six weapons wind up differently, and the three hits of a jab combo share their hit frames while winding up at different heights.
+- Choreography: every channel is finite for all styles, kinds, directions, trajectories and flags; a strike leaves no residue in the stance at its first and last frame; hips load back in the wind-up and drive forward at the strike; the lead foot is the one opposite the leading hand; the pile rebounds more than the razor; travelling strikes and spins release the feet; a shot kicks the hips back.
+- Animator, driven by a real `GameEngine`: the player holds a weapon in every state; idle carries it at rest on the chest; on every hit frame `held.live` is true and the held segment is the checked capsule within 1e-9, and `held.live` is false on every other frame; cannon shots point down the line of fire at natural length and are never live; the weapon tip never teleports across carry → strike → carry, chained strikes, attack → run or jump → aerial → land; a hand that is not easing is on the weapon within 1e-6; every strike hands the body back facing forward.
+
+### Browser verification
+
+`one weapon model is carried, wound up, lands on the checked capsule and follows through` reads `GameScene.combatGeometry` and `rigDiagnostics` — weapon pivot and tip from real Pixi world matrices:
+
+- carried, each of the six weapons is visible in its own style at its natural length within 2e-3;
+- for five melee weapons × both facings through a forward tilt, on every hit tick the rendered pivot and tip equal `attack.collision.capsule` within 1e-4 per axis, and `held.live` equals `collision.active` on every tick;
+- the tip does not teleport when the attack starts, when the hit frames end or when the move ends; the weapon draws away before it strikes (the scythe turns back against its spin); for wind-ups of eight frames or more the tip enters the first hit tick no faster than 1.5× its fastest hit tick;
+- after the move the weapon stays within 0.02 m of its natural length while settling and is back to it within 5e-3;
+- a cannon shot never stretches the model and is never `live`.
+
+It saves wind-up, strike and follow-through frames per weapon (`weapon-<style>-1-windup.png`, `-2-strike.png`, `-3-follow.png`, plus the arc's three jab wind-ups) to the existing `gameplay-screenshots` artifact. The existing weapon-matrix comparisons and the jointed-skeleton case pass unchanged.
+
+The tests and a frame-by-frame review of those screenshots found defects that were fixed in the code, not by loosening an assertion: vertical strikes jumped 1–3 mm entering the hit window; a zero-recovery move could read the rest pose on a tick a rounding error past its last hit frame; after a scythe orbit the body unwound about 190° and the shaft telescoped while settling; the razor had no draw-back; the wind-up was released two to four times faster than the hit frames it led into; and `held.live` stayed set through the recovery.
+
+### Limits
+
+Reaches are gameplay values far longer than a physical weapon, so blades and shafts visibly extend during a strike; the displayed weapon must equal the hit segment. There is no wrist joint, and the weapon's roll about its shaft is cosmetic and smoothed — after a scythe orbit the blade still rolls about a quarter turn over a few frames as its edge returns to face forward. Wind-ups of two or three frames (quick jabs, razor) have no time to read as a draw-back and have to hurry into the hit. From the fixed camera a slash is cocked into the far lane and a mid-orbit scythe points at the camera, so those frames are foreshortened. Motion was tuned from staged screenshots and numeric checks, not motion capture or extended play. Wind-up and follow-through are presentation: they deliberately do not change timing, cancels or hitboxes.
+
 ## Motion foundation: jointed skeleton
 
 Baseline: `codex/roguelite-map-ui` **`94aa0768`** (the roguelite route map stack on top of the combat and campaign improvements below). The change replaces each humanoid robot's five rigid blocks with rigid jointed bones placed by a CPU-solved skeleton (`src/render/rig/`): authored state poses, inertialized blending, world-anchored foot planting, and two-bone IK for arms and legs. The player's hands now follow the simulation's weapon capsule instead of a rotated, length-scaled arm. Collision code and move data are untouched. See [Skeleton and motion](combat-architecture.md#skeleton-and-motion).

@@ -1,6 +1,6 @@
 import type { Actor, ActorKind, WeaponId } from "../../game/types";
-import { attackMotion } from "../motion";
-import { clamp, clamp01, mix, smooth, type V3 } from "./math";
+import { strikePose, type Strike } from "./choreography";
+import { clamp, clamp01, mix, smooth } from "./math";
 import { restPose, type CorePose, type RigSpec } from "./skeleton";
 
 /** Everything a pose may read. Poses are pure functions of this snapshot. */
@@ -14,6 +14,8 @@ export interface PoseContext {
   gait: { phase: number; speed: number; moving: boolean; velocity: { x: number; z: number } };
   airborne: boolean;
   mounted: boolean;
+  /** The strike being thrown, when the actor is attacking with a move that has a segment. */
+  strike: Strike | null;
 }
 
 /** Which fighting style an actor's attack poses borrow. */
@@ -23,33 +25,16 @@ export function poseStyle(kind: ActorKind, weapon: WeaponId): WeaponId {
   return kind === "scout" ? "arc" : "razor";
 }
 
-/**
- * Direction of a straight arm for a shoulder Euler rotation `(x, y, z)` in the renderer's order
- * (about Z, then Y, then X). Bridges the authored shoulder angles to IK hand targets.
- */
-export function armDirection(x: number, y: number, z: number): V3 {
-  const sx = Math.sin(z) * Math.cos(y),
-    sy = -Math.cos(z),
-    sz = -Math.sin(z) * Math.sin(y);
-  return { x: sx, y: sy * Math.cos(x) - sz * Math.sin(x), z: sy * Math.sin(x) + sz * Math.cos(x) };
-}
-
 type Side = "L" | "R";
 const setHand = (pose: CorePose, side: Side, x: number, y: number, z: number): void => {
   pose[`hand${side}X`] = x;
   pose[`hand${side}Y`] = y;
   pose[`hand${side}Z`] = z;
 };
-const mixHand = (pose: CorePose, side: Side, to: V3, t: number): void => {
-  pose[`hand${side}X`] = mix(pose[`hand${side}X`], to.x, t);
-  pose[`hand${side}Y`] = mix(pose[`hand${side}Y`], to.y, t);
-  pose[`hand${side}Z`] = mix(pose[`hand${side}Z`], to.z, t);
-};
-
 /** How the player carries each weapon between attacks. */
 function carry(pose: CorePose, weapon: WeaponId): void {
   if (weapon === "razor") {
-    pose.hipY -= 0.08;
+    pose.hipY -= 0.05;
     setHand(pose, "R", -0.14, -0.2, 0.4);
     setHand(pose, "L", 0.14, -0.14, 0.36);
     pose.elbowRY = pose.elbowLY = -1;
@@ -62,6 +47,16 @@ function carry(pose: CorePose, weapon: WeaponId): void {
     setHand(pose, "L", 0.26, -0.34, 0.42);
   } else setHand(pose, "R", 0.08, -0.64, 0.2);
 }
+
+/** Where each weapon rides while running: extra elevation, heading and drop of its carry. */
+const RUN_CARRY: Record<WeaponId, { pitch: number; yaw: number; drop: number }> = {
+  arc: { pitch: -1.15, yaw: 0.5, drop: -0.14 },
+  pile: { pitch: -0.45, yaw: 0.2, drop: -0.05 },
+  razor: { pitch: 0, yaw: 0, drop: 0 },
+  lance: { pitch: -0.22, yaw: 0, drop: -0.06 },
+  cannon: { pitch: -0.08, yaw: 0, drop: -0.04 },
+  scythe: { pitch: 0.3, yaw: 0.25, drop: 0 },
+};
 
 function locomotion(pose: CorePose, ctx: PoseContext): void {
   const { gait } = ctx;
@@ -94,45 +89,9 @@ function airborne(pose: CorePose, ctx: PoseContext): void {
   pose.footLPitch = 0.35;
   pose.footRPitch = 0.6;
   pose.chestPitch += air(0.08, -0.06);
+  pose.carryPitch += air(0.25, 0.55);
   setHand(pose, "L", -0.2, air(-0.42, -0.2), 0.32);
   setHand(pose, "R", 0.2, air(-0.5, -0.26), air(0.3, 0.18));
-}
-
-function attack(pose: CorePose, ctx: PoseContext): void {
-  const attackState = ctx.actor.attack;
-  if (!attackState) return;
-  const motion = attackMotion(attackState, poseStyle(ctx.kind, ctx.weapon));
-  const w = motion.weight;
-  // Small turns twist the chest over planted feet; full spins carry the whole body round.
-  const spin = Math.abs(motion.bodyY) > 1.4;
-  pose.hipYaw += motion.bodyY * w * (spin ? 1 : 0.4);
-  pose.chestYaw += spin ? 0 : motion.bodyY * w * 0.6;
-  pose.chestPitch += motion.bodyX * w * 0.7;
-  pose.hipPitch += motion.bodyX * w * 0.3;
-  pose.hipY += motion.crouch * w;
-  for (const side of ["L", "R"] as const) {
-    const m = side === "L" ? "left" : "right";
-    const dir = armDirection(motion[`${m}ArmX`], motion[`${m}ArmY`], motion[`${m}ArmZ`]);
-    const reach = (ctx.spec.upperArm + ctx.spec.forearm) * 0.93;
-    mixHand(pose, side, { x: dir.x * reach, y: dir.y * reach, z: dir.z * reach }, w);
-    const stride = -Math.sin(motion[`${m}LegX`]) * 0.7 * w;
-    pose[`foot${side}Z`] += stride;
-    if (ctx.airborne) pose[`foot${side}Y`] += Math.max(0, -stride) * 0.3;
-  }
-  if (spin) {
-    // Pivot the stance with the hips instead of wringing the legs.
-    const c = Math.cos(pose.hipYaw),
-      s = Math.sin(pose.hipYaw);
-    for (const side of ["L", "R"] as const) {
-      const x = pose[`foot${side}X`],
-        z = pose[`foot${side}Z`];
-      pose[`foot${side}X`] = x * c + z * s;
-      pose[`foot${side}Z`] = -x * s + z * c;
-    }
-    pose.plant = 0;
-  }
-  const sliding = attackState.kind === "dash" || ["rush", "phase", "leap"].includes(attackState.move?.behavior ?? "");
-  if (sliding) pose.plant = 0;
 }
 
 /** The authored pose for the actor's current state, before blending and constraints. */
@@ -150,10 +109,18 @@ export function statePose(ctx: PoseContext): CorePose {
   else if (ctx.gait.moving && (state === "run" || state === "idle")) {
     const hands = { R: [pose.handRX, pose.handRY, pose.handRZ], L: [pose.handLX, pose.handLY, pose.handLZ] };
     locomotion(pose, ctx);
-    // Two-handed and guard carries keep their grip instead of pumping the arms.
-    if (kind === "player" && ctx.weapon !== "arc" && ctx.weapon !== "pile") {
-      setHand(pose, "R", hands.R[0]!, hands.R[1]!, hands.R[2]! + (pose.handRZ - 0.06) * 0.2);
-      setHand(pose, "L", hands.L[0]!, hands.L[1]!, hands.L[2]! + (pose.handLZ - 0.06) * 0.2);
+    if (kind === "player") {
+      // Two-handed and guard carries keep their grip instead of pumping the arms.
+      if (ctx.weapon !== "arc") {
+        setHand(pose, "R", hands.R[0]!, hands.R[1]!, hands.R[2]! + (pose.handRZ - 0.06) * 0.2);
+        setHand(pose, "L", hands.L[0]!, hands.L[1]!, hands.L[2]! + (pose.handLZ - 0.06) * 0.2);
+      } else setHand(pose, "R", hands.R[0]!, hands.R[1]!, hands.R[2]!);
+      // Running, each weapon settles where it is least in the way.
+      const pace = clamp01(ctx.gait.speed / 6);
+      const run = RUN_CARRY[ctx.weapon];
+      pose.carryPitch += run.pitch * pace;
+      pose.carryYaw += run.yaw * pace;
+      pose.carryY += run.drop * pace;
     }
   }
 
@@ -166,10 +133,23 @@ export function statePose(ctx: PoseContext): CorePose {
       setHand(pose, "L", 0.1, -0.3, 0.42);
       pose.footLZ += 0.2;
       pose.footRZ -= 0.22;
+      // Drawn back over the shoulder, shaking a little as the charge builds.
+      pose.carryPitch += 1.05 + Math.sin(ctx.time * 31) * 0.025;
+      pose.carryYaw += 0.45;
+      pose.carryZ -= 0.16;
       break;
     case "attack":
       if (ctx.airborne) airborne(pose, ctx);
-      attack(pose, ctx);
+      if (ctx.strike) strikePose(pose, ctx.strike);
+      else {
+        // A reach with nothing in it: a missed grab.
+        pose.hipY -= 0.08;
+        pose.chestPitch += 0.18;
+        setHand(pose, "L", 0.14, -0.2, 0.6);
+        setHand(pose, "R", -0.1, -0.24, 0.5);
+        pose.carryPitch -= 0.5;
+        pose.carryYaw += 0.6;
+      }
       break;
     case "grab":
     case "shield":
@@ -178,6 +158,9 @@ export function statePose(ctx: PoseContext): CorePose {
       setHand(pose, "R", -0.12, -0.2, 0.52);
       pose.footLZ += 0.12;
       pose.footRZ -= 0.1;
+      // Weapon across the body as a guard.
+      pose.carryPitch += 0.25;
+      pose.carryYaw -= 0.75;
       break;
     case "dodge":
       pose.chestPitch += 0.6;
@@ -189,6 +172,7 @@ export function statePose(ctx: PoseContext): CorePose {
       pose.footRPitch = 0.7;
       setHand(pose, "L", -0.1, -0.4, 0.4);
       setHand(pose, "R", 0.12, -0.45, -0.3);
+      pose.carryPitch -= 0.9;
       break;
     case "wavedash":
       pose.hipY -= 0.24;
@@ -199,6 +183,7 @@ export function statePose(ctx: PoseContext): CorePose {
       pose.footLX = -stance - 0.08;
       pose.footRX = stance + 0.08;
       setHand(pose, "R", 0.16, -0.5, -0.36);
+      pose.carryPitch -= 0.7;
       break;
     case "hurt":
     case "grabbed": {
@@ -211,6 +196,8 @@ export function statePose(ctx: PoseContext): CorePose {
       pose.footRZ = -0.12;
       pose.footLY = ctx.airborne ? 0.22 : 0;
       pose.footRY = ctx.airborne ? 0.1 : 0;
+      pose.carryPitch += 0.5;
+      pose.carryYaw += 0.7;
       // Knocked back: the trunk goes first and the feet trail.
       pose.tumble = clamp(ctx.gait.velocity.z * 0.05, -0.9, 0.9);
       break;

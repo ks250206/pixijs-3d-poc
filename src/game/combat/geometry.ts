@@ -1,5 +1,6 @@
 import type { Actor } from "../types";
 import { activeEnd, type MoveDefinition } from "./moves";
+import { weaponPose } from "./trajectory";
 export interface Vec3 {
   x: number;
   y: number;
@@ -22,20 +23,42 @@ const lerp = (a: Vec3, b: Vec3, t: number): Vec3 => ({
   z: mix(a.z, b.z, t),
 });
 
-/** World axes: +X stage right, +Y up, +Z front. Facing mirrors X only. */
+/**
+ * World axes: +X stage right, +Y up, +Z front. Facing mirrors X only.
+ *
+ * The one source of weapon geometry for a whole move. Hit frames — `startup ≤ frame ≤ activeEnd` —
+ * are the strike arc collision has always used, computed here exactly as before. The wind-up and
+ * the follow-through around them come from `weaponPose`; nothing is ever hit on those frames, but
+ * the rendered weapon and the skeleton holding it follow the same segment.
+ */
 export function sampleWeapon(
   actor: Pick<Actor, "x" | "y" | "z" | "facing">,
   move: MoveDefinition,
   frame: number,
 ): Capsule {
   const { shape, frames, direction } = move;
+  // A tick can land a rounding error past the last hit frame and still be tested as that frame;
+  // it must read the strike's final pose, not the first instant of the follow-through.
+  if (frame < frames.startup || frame > activeEnd(move) + 1e-6) {
+    const pose = weaponPose(move, frame);
+    const origin = {
+      x: actor.x + actor.facing * pose.pivotX,
+      y: actor.y + pose.pivotY,
+      z: actor.z,
+    };
+    const reach = shape.reach * pose.extension;
+    return {
+      a: origin,
+      b: {
+        x: origin.x + actor.facing * pose.aim.x * reach,
+        y: origin.y + pose.aim.y * reach,
+        z: origin.z + pose.aim.z * reach,
+      },
+      radius: shape.radius,
+    };
+  }
   const t = clamp((frame - frames.startup) / Math.max(1, frames.active), 0, 1);
-  const startup = clamp(frame / Math.max(1, frames.startup), 0, 1);
-  const recovery = clamp((frame - activeEnd(move)) / Math.max(1, frames.recovery), 0, 1);
-  const extension =
-    frame < frames.startup
-      ? 0.5 + startup * 0.25
-      : (0.75 + 0.25 * Math.sin(t * Math.PI)) * (1 - recovery * 0.45);
+  const extension = 0.75 + 0.25 * Math.sin(t * Math.PI);
   const sign = direction === "back" ? -1 : 1;
   let vx = sign,
     vy = 0,

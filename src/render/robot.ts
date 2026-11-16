@@ -12,7 +12,7 @@ import {
 } from '@pixi/3d';
 import type { Actor, ActorKind, WeaponId } from '../game/types';
 import { RigAnimator, type RigFrame } from './rig/animator';
-import { quatMul, quatX, quatY } from './rig/math';
+import { quatMul, quatX, quatY, rotate } from './rig/math';
 import type { Xform } from './rig/skeleton';
 
 export interface RobotAssets {
@@ -58,13 +58,8 @@ export class RobotView {
   private readonly leftLeg = new Container3D();
   private readonly rightLeg = new Container3D();
   private readonly animator: RigAnimator | null;
-  private readonly blade = new Container3D();
-  private readonly hammer = new Container3D();
-  private readonly fist = new Container3D();
-  private readonly offhand = new Container3D();
-  private readonly lance = new Container3D();
-  private readonly cannon = new Container3D();
-  private readonly scythe = new Container3D();
+  /** Razor gauntlets, one per forearm; the claws themselves are the weapon. */
+  private readonly gauntlets = [new Container3D(), new Container3D()];
   private readonly chassisDetails = new Map<WeaponId, Container3D>();
   private readonly guardPlate = new Container3D();
   private readonly mount = new Container3D();
@@ -293,38 +288,11 @@ export class RobotView {
     }
 
     if (this.kind === 'player') {
-      this.rightArm.addChild(this.blade, this.hammer, this.fist, this.lance, this.cannon, this.scythe);
-      this.blade.position.set(0, -0.74, 0.12);
-      this.box(this.blade, a.trim, 0, 0, 0.2, 0.16, 0.15, 0.4, false);
-      this.box(this.blade, a.white, 0, 0, 0.65, 0.075, 0.14, 0.85, false);
-      this.box(this.blade, glow, 0.045, 0, 0.73, 0.025, 0.17, 1.02, false);
-      this.hammer.position.set(0, -0.74, 0.08);
-      this.box(this.hammer, a.joint, 0, 0, 0.45, 0.11, 0.11, 0.9, false);
-      this.box(this.hammer, a.white, 0, 0, 0.82, 0.62, 0.42, 0.38, false);
-      this.box(this.hammer, glow, 0, 0, 1.02, 0.5, 0.23, 0.035, false);
-      this.fist.position.set(0, -0.71, 0.15);
-      this.box(this.fist, a.white, 0, 0, 0.06, 0.35, 0.3, 0.4, false);
-      for (const x of [-0.1, 0, 0.1]) this.box(this.fist, glow, x, 0.05, 0.48, 0.035, 0.06, 0.6, false);
-      this.leftArm.addChild(this.offhand);
-      this.box(this.offhand, a.white, 0, -0.71, 0.21, 0.35, 0.3, 0.4, false);
-      for (const x of [-0.1, 0, 0.1]) this.box(this.offhand, glow, x, -0.66, 0.63, 0.035, 0.06, 0.6, false);
-
-      // Long weapons follow the forearm axis, extending from the gripping hand.
-      this.lance.position.set(0, -0.74, 0.12);
-      this.box(this.lance, a.trim, 0, -0.5, 0, 0.085, 2.8, 0.085, false);
-      this.box(this.lance, a.white, 0, -1.95, 0, 0.2, 0.62, 0.1, false);
-      this.box(this.lance, glow, 0, -2.2, 0, 0.09, 0.65, 0.14, false);
-      this.box(this.lance, glow, 0, -1.65, 0, 0.45, 0.07, 0.15, false);
-      this.cannon.position.set(0, -0.68, 0.06);
-      this.box(this.cannon, a.trim, 0, -0.28, 0, 0.56, 0.9, 0.58);
-      this.box(this.cannon, a.white, 0, -0.7, 0, 0.36, 0.65, 0.4);
-      this.box(this.cannon, glow, 0, -1.04, 0, 0.28, 0.05, 0.3, false);
-      for (const y of [-0.15, -0.3, -0.45]) this.box(this.cannon, glow, 0.29, y, 0, 0.03, 0.06, 0.4, false);
-      this.scythe.position.set(0, -0.74, 0.12);
-      this.box(this.scythe, a.trim, 0, -0.38, 0, 0.1, 2.15, 0.1, false);
-      for (let i = 0; i < 5; i++) {
-        const blade = this.box(this.scythe, i < 3 ? a.white : glow, 0, -1.45 + i * i * 0.035, 0.23 + i * 0.24, 0.1, 0.21 - i * 0.025, 0.42 - i * 0.04, false);
-        blade.rotation.x = -i * 0.16;
+      for (const [index, arm] of [this.leftArm, this.rightArm].entries()) {
+        const gauntlet = this.gauntlets[index]!;
+        arm.addChild(gauntlet);
+        this.box(gauntlet, a.white, 0, -0.7, 0.05, 0.32, 0.3, 0.36, false);
+        this.box(gauntlet, glow, 0, -0.86, 0.05, 0.24, 0.03, 0.26, false);
       }
       for (const weapon of ['arc', 'pile', 'razor', 'lance', 'cannon', 'scythe'] as const) {
         const detail = new Container3D(); detail.label = `chassis-${weapon}`;
@@ -395,15 +363,8 @@ export class RobotView {
     }
     this.shield.visible = actor.state === 'shield' || actor.state === 'airdodge';
 
-    const authoritativeWeapon = this.weaponView?.update(actor) ?? false;
     if (this.kind === 'player') {
-      this.blade.visible = !authoritativeWeapon && weapon === 'arc';
-      this.hammer.visible = !authoritativeWeapon && weapon === 'pile';
-      this.fist.visible = !authoritativeWeapon && weapon === 'razor';
-      this.offhand.visible = !authoritativeWeapon && weapon === 'razor';
-      this.lance.visible = !authoritativeWeapon && weapon === 'lance';
-      this.cannon.visible = !authoritativeWeapon && weapon === 'cannon';
-      this.scythe.visible = !authoritativeWeapon && weapon === 'scythe';
+      for (const gauntlet of this.gauntlets) gauntlet.visible = weapon === 'razor';
       this.chassisDetails.forEach((detail, id) => { detail.visible = weapon === id; });
     }
     this.guardPlate.visible = actor.guard > 0;
@@ -417,6 +378,7 @@ export class RobotView {
       this.root.visible = Math.floor(time * 16) % 3 !== 0;
     }
 
+    if (this.weaponView) this.weaponView.root.visible = false;
     if (!this.animator) {
       this.root.rotation.y = actor.facing * Math.PI / 2;
       this.body.y = 0.8 + Math.sin(time * 4.5) * 0.08;
@@ -434,7 +396,24 @@ export class RobotView {
     const capsule = actor.state === 'attack' && actor.attack?.move
       ? actor.attack.collision?.capsule ?? sampleWeapon(actor, actor.attack.move, actor.attack.elapsed * 60)
       : null;
-    this.apply(this.animator.update(actor, time, weapon, capsule));
+    const frame = this.animator.update(actor, time, weapon, capsule);
+    this.apply(frame);
+    if (this.weaponView && frame.held) {
+      const held = frame.held;
+      const rootQ = quatMul(quatY(frame.yaw), quatX(frame.tumble));
+      const toWorld = (p: { x: number; y: number; z: number }) => {
+        const r = rotate(rootQ, p);
+        return { x: actor.x + r.x * scale, y: actor.y + r.y * scale, z: actor.z + r.z * scale };
+      };
+      // On hit frames the weapon is laid on the very capsule the simulation checked.
+      const exact = held.live && capsule;
+      this.weaponView.root.visible = this.root.visible;
+      this.weaponView.place(
+        exact ? capsule.a : toWorld(held.a), exact ? capsule.b : toWorld(held.b),
+        held.style, held.grip * scale, rotate(rootQ, { x: 0, y: 0, z: 1 }),
+        actor.state === 'attack' && !!actor.attack?.move, time,
+      );
+    }
   }
 
   private apply(frame: RigFrame): void {

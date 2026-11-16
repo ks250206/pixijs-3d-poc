@@ -43,6 +43,20 @@ export function worldToRig(actor: { x: number; y: number; z: number; scale: numb
   };
 }
 
+/**
+ * Rig point → world as the robot root places it: world = actor + Ry(yaw)·Rx(tumble)·p·scale.
+ * With no tumble this is the inverse of `worldToRig`; written independently of the source.
+ */
+export function rigToWorld(actor: { x: number; y: number; z: number; scale: number }, yaw: number, p: V3, tumble = 0): V3 {
+  const y = p.y * Math.cos(tumble) - p.z * Math.sin(tumble),
+    z = p.y * Math.sin(tumble) + p.z * Math.cos(tumble);
+  return {
+    x: actor.x + (p.x * Math.cos(yaw) + z * Math.sin(yaw)) * actor.scale,
+    y: actor.y + y * actor.scale,
+    z: actor.z + (-p.x * Math.sin(yaw) + z * Math.cos(yaw)) * actor.scale,
+  };
+}
+
 /** Paths of every non-finite number inside a value. */
 export function nonFinite(value: unknown, path = '$', out: string[] = []): string[] {
   if (typeof value === 'number') {
