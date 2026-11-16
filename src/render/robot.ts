@@ -394,7 +394,7 @@ export class RobotView {
       for (const { mesh, material } of this.parts) mesh.material = flash ? this.assets.flash : material;
       this.flashed = flash;
     }
-    if (actor.invulnerable > 0 && actor.state !== 'dodge' && actor.state !== 'airdodge') {
+    if (actor.alive && actor.invulnerable > 0 && actor.state !== 'dodge' && actor.state !== 'airdodge') {
       this.root.visible = Math.floor(time * 16) % 3 !== 0;
     }
 

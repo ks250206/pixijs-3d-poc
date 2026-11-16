@@ -24,6 +24,7 @@ import { ARENA_HALF_WIDTH, SECTOR_SPAN, STAGES } from '../game/campaign';
 import { RobotView } from './robot';
 import type { RobotAssets } from './robot';
 import { loadGraphics, normalizeGraphics, saveGraphics, sceneResolution, type GraphicsSettings, type GraphicsState } from './graphics';
+import { overlaps, placeCombatLabels, sameLane, SAME_LANE_DISTANCE, type LabelAnchor, type ScreenRect } from './readability';
 
 const COLORS: Record<ActorKind, number> = {
   player: 0x62fff0,
@@ -81,9 +82,14 @@ export class GameScene {
   private readonly view: View3D;
   private readonly labels = new Container();
   private readonly stars = new Graphics();
+  private readonly combatGuides = new Graphics();
+  private readonly playerBeacon = new Text({ text: 'P1', style: { fontFamily: 'monospace', fontSize: 13, fontWeight: '800', fill: 0x8ffff1, stroke: { color: 0x07111c, width: 4 } } });
   private readonly scenery = new Container3D();
   private readonly stageDecor = new Container3D();
   private debugHitboxes = false;
+  private debugDetails = false;
+  private readability = { playerOccluded: false, playerOffscreen: false, laneTargets: 0, visibleLabels: [] as string[] };
+  private readonly spawnWarnings = new Map<string, { ring: Mesh3D; label: Text }>();
   private readonly combatDebug: Mesh3D[] = [];
   private readonly debugSegments = new Map<string, Mesh3D>();
   private readonly actors = new Map<string, ActorView>();
@@ -148,7 +154,9 @@ export class GameScene {
     this.view.eventMode = 'none';
     this.labels.eventMode = 'none';
     this.stars.eventMode = 'none';
-    app.stage.addChild(this.stars, this.view, this.labels);
+    this.combatGuides.eventMode = this.playerBeacon.eventMode = 'none';
+    this.playerBeacon.anchor.set(0.5, 1);
+    app.stage.addChild(this.stars, this.view, this.combatGuides, this.labels, this.playerBeacon);
     this.view.root.addChild(this.scenery);
     this.view.camera.mode = 'orthographic';
     this.view.camera.orthographicSize = 15;
@@ -613,9 +621,14 @@ export class GameScene {
       entry.root.position.set(prop.x, 0, prop.z);
       entry.root.visible = prop.alive;
       const point = this.view.worldToScreen({ x: prop.x, y: prop.height + 0.5, z: prop.z });
-      entry.label.visible = prop.alive && point !== null && world.phase !== 'ready';
+      const objective = prop.kind === 'relay' || prop.kind === 'node';
+      const danger = prop.kind === 'vent' && prop.phase !== 'idle';
+      const nearby = Math.abs(prop.x - world.player.x) < 5 && Math.abs(prop.z - world.player.z) < 2.5;
+      entry.label.visible = prop.alive && point !== null && world.phase !== 'ready'
+        && (objective || danger || (nearby && prop.kind !== 'conveyor' && prop.kind !== 'vent') || (this.debugDetails && world.mode === 'training'));
       if (point) entry.label.position.copyFrom(point);
-      const title = prop.kind === 'relay' || prop.kind === 'node' ? `${prop.kind === 'relay' ? '◆ RELAY' : '◆ GATE NODE'} / ${Math.ceil(prop.hp)} HP` : prop.kind === 'crate' ? `REPAIR BOX / ${Math.ceil(prop.hp)}` : prop.kind === 'barrel' ? '⚠ EXPLOSIVE' : prop.kind === 'repair' ? 'REPAIR −25%' : prop.kind === 'conveyor' ? (prop.direction > 0 ? 'CONVEYOR →' : '← CONVEYOR') : prop.phase === 'warning' ? `⚠ HEAT / ${Math.max(0, 5 - prop.timer).toFixed(1)}s` : prop.phase === 'active' ? '▲ HEAT ▲' : 'VENT';
+      const objectiveName = prop.kind === 'relay' ? '◆ 増援リレー' : prop.id.endsWith('-0') ? '◆ 砲撃制御' : '◆ 危険床制御';
+      const title = objective ? `${objectiveName} ${Math.ceil(prop.hp)}` : prop.kind === 'crate' ? `修復箱 ${Math.ceil(prop.hp)}` : prop.kind === 'barrel' ? '⚠ 爆発' : prop.kind === 'repair' ? '修復 −25%' : prop.kind === 'conveyor' ? (prop.direction > 0 ? '→' : '←') : prop.phase === 'warning' ? `⚠ ${Math.max(0, 5 - prop.timer).toFixed(1)}s` : prop.phase === 'active' ? '▲ 危険 ▲' : 'VENT';
       if (entry.label.text !== title) entry.label.text = title;
       if (prop.kind === 'vent') {
         entry.indicator.material = prop.phase === 'idle' ? this.assets.trim : this.glow(0xff654d);
@@ -707,6 +720,8 @@ export class GameScene {
   }
 
   toggleHitboxes(): boolean { this.debugHitboxes = !this.debugHitboxes; return this.debugHitboxes; }
+  toggleDetails(): boolean { this.debugDetails = !this.debugDetails; return this.debugDetails; }
+  getReadability() { return { ...this.readability, visibleLabels: [...this.readability.visibleLabels] }; }
 
   weaponTip(actorId: string): { x: number; y: number; z: number } | null {
     return this.actors.get(actorId)?.robot.weaponView?.tipWorld() ?? null;
@@ -754,9 +769,14 @@ export class GameScene {
     view.robot.update(actor, world.time, world.loadout.weapon);
     const boss = actor.kind === 'boss' || actor.kind === 'warden';
     const point = this.view.worldToScreen({ x: actor.x, y: actor.y + actor.scale * (actor.kind === 'drone' ? 1.6 : boss ? 2.45 : 2.3), z: actor.z });
-    view.label.visible = actor.alive && point !== null && world.phase !== 'ready';
+    const detailed = this.debugDetails && world.mode === 'training';
+    const nearby = Math.abs(actor.x - world.player.x) < 7;
+    view.label.visible = actor.alive && point !== null && world.phase !== 'ready' && actor.kind !== 'player'
+      && (detailed || boss || actor.telegraph > 0 || actor.state === 'hurt' || (nearby && sameLane(actor, world.player)));
     if (point) view.label.position.copyFrom(point);
-    const labelText = `${actor.bossPhase === 'overdrive' ? '⚡ OVERDRIVE / ' : actor.bossPhase === 'transition' ? '⚡ BOOT / ' : ''}${actor.kind === 'minion' ? '' : `${ENEMY_NAMES[actor.kind]}${actor.tactic ? ` [${actor.tactic}]` : ''}  `}${Math.round(actor.damage)}%${actor.guard > 0 ? `\n▰ GUARD ${Math.ceil(actor.guard)}` : actor.mount > 0 ? `\n▰ MOUNT ${Math.ceil(actor.mount)}` : ''}`;
+    const labelText = detailed
+      ? `${ENEMY_NAMES[actor.kind]}${actor.tactic ? ` [${actor.tactic}]` : ''} ${Math.round(actor.damage)}%${actor.guard > 0 ? ` / GUARD ${Math.ceil(actor.guard)}` : actor.mount > 0 ? ` / MOUNT ${Math.ceil(actor.mount)}` : ''}`
+      : `${actor.telegraph > 0 ? '! ' : ''}${Math.round(actor.damage)}%${actor.guard > 0 ? ' ◇' : actor.mount > 0 ? ' ▰' : ''}`;
     if (view.label.text !== labelText) view.label.text = labelText;
     view.label.style.fill = actor.damage > 110 ? 0xff695f : actor.damage > 65 ? 0xffc27b : COLORS[actor.kind];
 
@@ -919,10 +939,127 @@ export class GameScene {
       const point = this.view.worldToScreen({ x: labelX, y: 0.4, z: zone.z });
       entry.label.visible = point !== null;
       if (point) entry.label.position.copyFrom(point);
-      entry.label.text = active ? '▲ DANGER ▲' : `⚠ ${zone.pattern.toUpperCase()} ${(zone.delay - zone.elapsed).toFixed(1)}`;
+      entry.label.text = active ? '▲ 危険 ▲' : `⚠ ${this.debugDetails && world.mode === 'training' ? `${zone.pattern.toUpperCase()} ` : ''}${(zone.delay - zone.elapsed).toFixed(1)}s`;
     }
     for (const [id, entry] of this.hazards) if (!ids.has(id)) {
       entry.root.destroy({ children: true }); entry.label.destroy(); this.hazards.delete(id);
+    }
+  }
+
+  private screenBounds(x: number, y: number, z: number, width: number, height: number): ScreenRect | null {
+    const points = [
+      this.view.worldToScreen({ x: x - width / 2, y, z }),
+      this.view.worldToScreen({ x: x + width / 2, y: y + height, z }),
+    ];
+    if (!points[0] || !points[1]) return null;
+    return { left: Math.min(points[0].x, points[1].x), right: Math.max(points[0].x, points[1].x), top: Math.min(points[0].y, points[1].y), bottom: Math.max(points[0].y, points[1].y) };
+  }
+
+  private floorRing(x: number, z: number, radius: number, color: number, strong = false): void {
+    const points: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const angle = i / 20 * Math.PI * 2;
+      const p = this.view.worldToScreen({ x: x + Math.cos(angle) * radius, y: 0.04, z: z + Math.sin(angle) * radius });
+      if (!p) return;
+      points.push(p.x, p.y);
+    }
+    this.combatGuides.poly(points).fill({ color, alpha: strong ? 0.12 : 0.035 }).stroke({ color, alpha: strong ? 0.95 : 0.6, width: strong ? 2 : 1.2 });
+  }
+
+  /** Screen-space guides remain visible behind large enemies and in low graphics mode. */
+  private updateReadability(world: WorldState): void {
+    this.combatGuides.clear();
+    this.playerBeacon.visible = false;
+    this.readability = { playerOccluded: false, playerOffscreen: false, laneTargets: 0, visibleLabels: [] };
+    if (world.phase === 'ready') return;
+    const p = world.player;
+    const anchors: LabelAnchor[] = [];
+    for (const actor of world.enemies) {
+      const label = this.actors.get(actor.id)?.label;
+      if (!label?.visible) continue;
+      anchors.push({ id: actor.id, x: label.x, y: label.y, width: label.width, height: label.height,
+        priority: (actor.telegraph > 0 ? 100 : 0) + (actor.state === 'hurt' ? 60 : 0) + (actor.kind === 'boss' || actor.kind === 'warden' ? 80 : 0) - Math.abs(actor.x - p.x) });
+    }
+    const detailed = this.debugDetails && world.mode === 'training';
+    const candidates = anchors.sort((a, b) => b.priority - a.priority);
+    for (const omitted of candidates.slice(detailed ? candidates.length : 6)) this.actors.get(omitted.id)!.label.visible = false;
+    for (const placement of placeCombatLabels(candidates.slice(0, detailed ? candidates.length : 6), this.viewportWidth, this.viewportHeight)) {
+      const label = this.actors.get(placement.id)!.label;
+      label.visible = placement.visible;
+      label.position.set(placement.x, placement.y);
+      if (placement.visible) this.readability.visibleLabels.push(label.text);
+    }
+    if (!p.alive) return;
+
+    const nearZ = Math.max(-4, p.z - SAME_LANE_DISTANCE), farZ = Math.min(4, p.z + SAME_LANE_DISTANCE);
+    const band = [
+      this.view.worldToScreen({ x: world.arenaMin, y: 0.025, z: nearZ }),
+      this.view.worldToScreen({ x: world.arenaMax, y: 0.025, z: nearZ }),
+      this.view.worldToScreen({ x: world.arenaMax, y: 0.025, z: farZ }),
+      this.view.worldToScreen({ x: world.arenaMin, y: 0.025, z: farZ }),
+    ];
+    if (band.every(Boolean)) this.combatGuides.poly(band.flatMap(point => [point!.x, point!.y])).fill({ color: 0x62fff0, alpha: 0.045 });
+    for (const enemy of world.enemies) if (enemy.alive && sameLane(p, enemy) && Math.abs(enemy.x - p.x) < 7) {
+      this.floorRing(enemy.x, enemy.z, 0.48 * enemy.scale, 0x8ffff1);
+      this.readability.laneTargets++;
+    }
+    this.floorRing(p.x, p.z, 0.62, 0x62fff0, true);
+
+    const body = this.screenBounds(p.x, p.y + 0.08, p.z, 0.95 * p.scale, 2 * p.scale);
+    const head = this.view.worldToScreen({ x: p.x, y: p.y + 2.45 * p.scale, z: p.z });
+    const foot = this.view.worldToScreen({ x: p.x, y: 0.04, z: p.z });
+    const airborneFoot = this.view.worldToScreen({ x: p.x, y: p.y, z: p.z });
+    if (p.y > 0.35 && foot && airborneFoot) {
+      this.combatGuides.moveTo(foot.x, foot.y).lineTo(airborneFoot.x, airborneFoot.y).stroke({ color: 0x62fff0, alpha: 0.45, width: 1 });
+    }
+    if (!head || !body) return;
+    const occludedByActor = world.enemies.some(enemy => {
+      // A large body can cover P1 on the same lane; compare its front surface, not only its center.
+      if (!enemy.alive || enemy.z + 0.5 * enemy.scale < p.z + 0.12) return false;
+      const bounds = this.screenBounds(enemy.x, enemy.y, enemy.z, (enemy.kind === 'boss' || enemy.kind === 'warden' ? 1.5 : 0.85) * enemy.scale, 2.2 * enemy.scale);
+      return bounds !== null && overlaps(body, bounds);
+    });
+    const occludedByProp = world.props.some(prop => {
+      if (!prop.alive || prop.height < 0.8 || prop.z + prop.depth / 2 < p.z + 0.12) return false;
+      const bounds = this.screenBounds(prop.x, 0, prop.z, prop.width, prop.height);
+      return bounds !== null && overlaps(body, bounds);
+    });
+    this.readability.playerOccluded = occludedByActor || occludedByProp;
+    if (this.readability.playerOccluded) {
+      const cx = (body.left + body.right) / 2, w = body.right - body.left, h = body.bottom - body.top;
+      const outline = { color: 0x8ffff1, width: 2, alpha: 0.95 };
+      this.combatGuides.roundRect(cx - w * 0.28, body.top, w * 0.56, h * 0.23, 3).fill({ color: 0x62fff0, alpha: 0.1 }).stroke(outline);
+      this.combatGuides.roundRect(cx - w * 0.42, body.top + h * 0.28, w * 0.84, h * 0.4, 3).fill({ color: 0x62fff0, alpha: 0.08 }).stroke(outline);
+      for (const side of [-1, 1]) this.combatGuides.moveTo(cx + side * w * 0.23, body.top + h * 0.68).lineTo(cx + side * w * 0.27, body.bottom).stroke(outline);
+    }
+    const offscreen = head.x < 20 || head.x > this.viewportWidth - 20 || head.y < 52 || body.top > this.viewportHeight - 50;
+    this.readability.playerOffscreen = offscreen;
+    this.playerBeacon.visible = true;
+    this.playerBeacon.text = offscreen ? `${head.x < 20 ? '◀' : head.x > this.viewportWidth - 20 ? '▶' : head.y < 52 ? '▲' : '▼'} P1` : 'P1';
+    this.playerBeacon.position.set(Math.max(28, Math.min(this.viewportWidth - 28, head.x)), Math.max(70, Math.min(this.viewportHeight - 64, head.y)));
+  }
+
+  private updateSpawnWarnings(world: WorldState): void {
+    const visible = new Set<string>();
+    for (const spawn of world.pendingSpawns ?? []) {
+      if (spawn.remaining > spawn.duration) continue;
+      visible.add(spawn.id);
+      let entry = this.spawnWarnings.get(spawn.id);
+      if (!entry) {
+        const ring = this.mesh(this.view.root, this.ring, this.glow(0xffd079), spawn.x, 0.06, spawn.z, 0.8, 1, 0.8);
+        const label = new Text({ text: '', style: { fontFamily: 'monospace', fontSize: 12, fill: 0xffd079, stroke: { color: 0x07111c, width: 4 } } });
+        label.anchor.set(0.5, 1); this.labels.addChild(label);
+        entry = { ring, label }; this.spawnWarnings.set(spawn.id, entry);
+      }
+      const pulse = 0.7 + 0.12 * Math.sin(world.time * 14);
+      entry.ring.position.set(spawn.x, 0.06, spawn.z); entry.ring.scale.set(pulse, 1, pulse);
+      const point = this.view.worldToScreen({ x: spawn.x, y: 0.55, z: spawn.z });
+      entry.label.visible = point !== null;
+      if (point) entry.label.position.copyFrom(point);
+      entry.label.text = `増援 ${Math.max(0, spawn.remaining).toFixed(1)}s`;
+    }
+    for (const [id, entry] of this.spawnWarnings) if (!visible.has(id)) {
+      entry.ring.destroy(); entry.label.destroy(); this.spawnWarnings.delete(id);
     }
   }
 
@@ -967,6 +1104,8 @@ export class GameScene {
         this.actors.delete(id);
       }
     }
+    this.updateReadability(world);
+    this.updateSpawnWarnings(world);
     const effectIds = new Set<string>();
     const visibleEffects = this.graphics.effects === 'full' ? world.effects.slice(-65)
       : world.effects.filter((effect) => effect.type !== 'trail' && effect.type !== 'spawn').slice(-24);

@@ -210,6 +210,16 @@ describe('movement', () => {
   });
 });
 
+// Advance authored waves, including announced arrivals, only for isolated structural fixtures.
+function defeatWave(game: GameEngine) {
+  const wave = game.world.wave;
+  for (let i = 0; i < 1200 && game.world.wave === wave && game.world.phase === 'playing'; i++) {
+    game.world.enemies.forEach((enemy) => { if (enemy.alive) enemy.x = game.world.arenaMax + 6; });
+    game.update(1 / 60);
+    if (wave === STAGES[game.world.sector]!.waves.length && !game.world.objective.complete && !game.world.pendingSpawns.length && !game.world.enemies.some((enemy) => enemy.alive)) break;
+  }
+}
+
 describe('campaign', () => {
   it('consumes stocks, respawns with invulnerability, and loses on stock three', () => {
     const game = new GameEngine(51);
@@ -242,7 +252,7 @@ describe('campaign', () => {
     }
     runCampaignInputs(game, 3600, () => game.world.phase === 'sector-clear');
     expect(game.world.phase).toBe('sector-clear');
-    game.nextSector();
+    if (game.world.upgradeChoices[0]) game.claimUpgrade(game.world.upgradeChoices[0].id); game.nextSector();
     expect(game.world.sector).toBe(1);
     expect(game.world.arenaMin).toBe(SECTOR_SPAN - ARENA_HALF_WIDTH);
     expect(game.world.wave).toBe(1);
@@ -254,11 +264,10 @@ describe('campaign', () => {
     game.start(createCandidates(8).find((candidate) => candidate.weapon === 'pile')!);
     for (let sector = 0; sector < STAGES.length - 1; sector++) {
       for (let wave = 0; wave < STAGES[sector]!.waves.length; wave++) {
-        for (const enemy of game.world.enemies) enemy.x = game.world.arenaMax + 6;
-        step(game, 90);
+        defeatWave(game);
       }
       runCampaignInputs(game, 3600, () => game.world.phase === 'sector-clear');
-      game.nextSector();
+      if (game.world.upgradeChoices[0]) game.claimUpgrade(game.world.upgradeChoices[0].id); game.nextSector();
     }
     for (let wave = 0; wave < STAGES.at(-1)!.waves.length - 1; wave++) {
       for (const enemy of game.world.enemies) enemy.x = game.world.arenaMax + 6;
@@ -321,7 +330,7 @@ describe('enemy tactics', () => {
         step(game, 90);
       }
       runCampaignInputs(game, 3600, () => game.world.phase === 'sector-clear');
-      game.nextSector();
+      if (game.world.upgradeChoices[0]) game.claimUpgrade(game.world.upgradeChoices[0].id); game.nextSector();
     }
     expect(kinds.has('sentinel')).toBe(true);
     expect(kinds.has('charger')).toBe(true);
@@ -512,7 +521,7 @@ describe('interactive arena', () => {
     const game = training();
     expect(game.world.props).toBeDefined();
     const oldIds = game.world.props.map((prop) => prop.id);
-    game.world.phase = 'sector-clear'; game.nextSector();
+    game.world.phase = 'sector-clear'; if (game.world.upgradeChoices[0]) game.claimUpgrade(game.world.upgradeChoices[0].id); game.nextSector();
     const belt = game.world.props.find((prop) => prop.kind === 'conveyor')!;
     expect(belt).toBeDefined();
     expect(game.world.props.every((prop) => !oldIds.includes(prop.id))).toBe(true);

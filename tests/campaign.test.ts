@@ -6,10 +6,19 @@ import { STAGES } from '../src/game/campaign';
 import { EMPTY_INPUT, type ActorKind } from '../src/game/types';
 
 const tick = (game: GameEngine, count = 1) => { for (let i = 0; i < count; i++) game.update(1 / 60); };
+// Structural fixture only; the ordinary-input campaign test independently verifies playability.
+const defeatWave = (game: GameEngine) => {
+  const wave = game.world.wave;
+  for (let i = 0; i < 1200 && game.world.wave === wave && game.world.phase === 'playing'; i++) {
+    game.world.enemies.forEach((enemy) => { if (enemy.alive) enemy.x = game.world.arenaMax + 6; });
+    tick(game);
+    if (wave === STAGES[game.world.sector]!.waves.length && !game.world.objective.complete && !game.world.pendingSpawns.length && !game.world.enemies.some((enemy) => enemy.alive)) break;
+  }
+};
 const gameAt = (sector = 0) => {
   const game = new GameEngine(73);
   game.start(createCandidates(73).find((c) => c.weapon === 'pile')!);
-  for (let i = 0; i < sector; i++) { game.world.phase = 'sector-clear'; game.nextSector(); }
+  for (let i = 0; i < sector; i++) { game.world.phase = 'sector-clear'; if (game.world.upgradeChoices[0]) game.claimUpgrade(game.world.upgradeChoices[0].id); game.nextSector(); }
   return game;
 };
 const isolated = (kind: ActorKind) => {
@@ -41,14 +50,13 @@ describe('campaign structure and supplies', () => {
         const live = game.world.enemies.filter((enemy) => enemy.alive);
         expect(live.length).toBeGreaterThan(0);
         expect(live.every((enemy) => enemy.x <= game.world.arenaMax && enemy.x >= game.world.arenaMin)).toBe(true);
-        for (const enemy of live) enemy.x = game.world.arenaMax + 6;
-        tick(game, 100);
+        defeatWave(game);
       }
       if (sector < STAGES.length - 1) {
         runCampaignInputs(game, 3600, () => game.world.phase === 'sector-clear');
         expect(game.world.phase).toBe('sector-clear');
         expect(game.world.completedSectors).toBe(sector + 1);
-        game.nextSector();
+        if (game.world.upgradeChoices[0]) game.claimUpgrade(game.world.upgradeChoices[0].id); game.nextSector();
       }
     }
     expect(game.world.phase).toBe('won');
@@ -67,7 +75,7 @@ describe('campaign structure and supplies', () => {
     expect(game.claimSupply('power')).toBe(true);
     expect(game.claimSupply('stock')).toBe(false);
     expect(game.world.loadout.power).toBeCloseTo(power + 0.08);
-    game.resume(); game.nextSector();
+    game.resume(); if (game.world.upgradeChoices[0]) game.claimUpgrade(game.world.upgradeChoices[0].id); game.nextSector();
     expect(game.world.loadout.power).toBeCloseTo(power + 0.08);
     expect(game.world.supplyClaimed).toBe(false);
   });
