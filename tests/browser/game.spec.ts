@@ -376,6 +376,8 @@ test('keyboard movement, jumping, charging, pausing and recovery work in the ren
   expect((await snapshot(page)).time).toBe(pausedTime);
   await page.locator('[data-action=resume]').click();
   await expect.poll(async () => (await snapshot(page)).phase).toBe('playing');
+  // Isolate focus from the preceding special's recovery and the five-frame action buffer.
+  await expect.poll(async () => (await snapshot(page)).player.state).toBe('idle');
   await page.locator('.top-actions [data-action=pause]').click();
   await expect.poll(async () => (await snapshot(page)).phase).toBe('paused');
   await page.keyboard.press('Escape');
