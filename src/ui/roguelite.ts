@@ -256,21 +256,25 @@ export class RogueliteUI {
     if (r.phase === "map" || r.phase === "combat") return "";
     let content = "";
     if (r.phase === "reward") {
-      content = `<h4>遭遇クリア / 武器強化</h4><p>強化をひとつ選んで、先へ進もう。</p>${g.world.upgradeClaimed ? '<p class="rogue-confirmed">✓ 報酬を確定しました</p>' : g.world.upgradeChoices.map((u) => `<button data-upgrade="${u.id}"><b>${u.name}</b><span>${u.description}</span></button>`).join("") + '<button class="rogue-text-button" data-rogue="skip">強化を辞退する</button>'}`;
+      content = `<h4>遭遇クリア / 武器強化</h4><p>強化をひとつ選んで、先へ進もう。</p>${g.world.upgradeClaimed ? '<p class="rogue-confirmed">✓ 報酬を確定しました</p>' : `<div class="rogue-choices">${g.world.upgradeChoices.map((u) => `<button data-upgrade="${u.id}"><b>${u.name}</b><span>${u.description}</span></button>`).join("")}</div><button class="rogue-text-button" data-rogue="skip">強化を辞退する</button>`}`;
     } else if (current?.kind === "event") {
       const event = r.events.resolved[current.id]!;
       const definition = EVENTS.find((e) => e.id === event.eventId)!;
-      content = `<h4>${definition.title}</h4><p>${definition.text}</p>${event.choice ? `<p class="rogue-confirmed" role="status">${event.result}<br>SCRAP ${event.scrapBefore} → ${event.scrapAfter}<br>Damage ${Math.round(event.before!.damage)} → ${Math.round(event.after!.damage)} / Stocks ${event.before!.stocks} → ${event.after!.stocks}</p>` : definition.options.map((o) => `<button data-event="${o.id}" ${eventPreview(r, event, o.id) ? "" : "disabled"}>${o.label}</button>`).join("")}`;
+      content = `<h4>${definition.title}</h4><p>${definition.text}</p>${event.choice ? `<p class="rogue-confirmed" role="status">${event.result}<br>SCRAP ${event.scrapBefore} → ${event.scrapAfter}<br>Damage ${Math.round(event.before!.damage)} → ${Math.round(event.after!.damage)} / Stocks ${event.before!.stocks} → ${event.after!.stocks}</p>` : `<div class="rogue-choices">${definition.options.map((o) => `<button data-event="${o.id}" ${eventPreview(r, event, o.id) ? "" : "disabled"}>${o.label}</button>`).join("")}</div>`}`;
     } else if (current?.kind === "shop") {
-      content = `<h4>補給品を選ぶ</h4>${r.economy.shops[current.id]!.map((item) => {
+      content = `<h4>補給品を選ぶ</h4><div class="rogue-choices">${r.economy.shops[current.id]!.map((item) => {
         const reason = g.purchaseReason(item.id);
-        return `<button data-buy="${item.id}" ${reason ? "disabled" : ""}><b>${item.name}</b><span class="rogue-price">${item.price} SCRAP</span>${reason ? `<span>${reason}</span>` : ""}</button>`;
-      }).join("")}`;
+        // Stock names carry "title: effect"; show the effect as its own line.
+        const split = item.name.indexOf(": ");
+        const [title, effect] =
+          split > 0 ? [item.name.slice(0, split), item.name.slice(split + 2)] : [item.name, ""];
+        return `<button data-buy="${item.id}" ${reason ? "disabled" : ""}><b>${title}</b><span class="rogue-price">${item.price} SCRAP</span>${effect ? `<span class="rogue-effect">${effect}</span>` : ""}${reason ? `<span class="rogue-reason">${reason}</span>` : ""}</button>`;
+      }).join("")}</div>`;
     } else if (current?.kind === "treasure") {
-      content = `<button data-benefit="treasure" ${r.economy.nodeClaims.includes(current.id) ? "disabled" : ""}>${r.economy.nodeClaims.includes(current.id) ? "✓ 物資を回収しました" : "宝箱を開ける"}</button>`;
+      content = `<div class="rogue-choices"><button data-benefit="treasure" ${r.economy.nodeClaims.includes(current.id) ? "disabled" : ""}>${r.economy.nodeClaims.includes(current.id) ? "✓ 物資を回収しました" : "宝箱を開ける"}</button></div>`;
     } else if (current?.kind === "rest") {
       const upgrade = g.restUpgrade();
-      content = `<h4>整備をひとつ選ぶ</h4><button data-benefit="repair" ${r.economy.nodeClaims.includes(current.id) || g.world.player.damage <= 0 ? "disabled" : ""}><b>機体を修復</b><span>蓄積ダメージ −50%</span></button><button data-benefit="upgrade" ${r.economy.nodeClaims.includes(current.id) ? "disabled" : ""}><b>武器を強化</b><span>${upgrade ? `${upgrade.name} rank ${upgrade.nextRank}: ${upgrade.description}` : "全強化上限 +20 SCRAP"}</span></button>`;
+      content = `<h4>整備をひとつ選ぶ</h4><div class="rogue-choices"><button data-benefit="repair" ${r.economy.nodeClaims.includes(current.id) || g.world.player.damage <= 0 ? "disabled" : ""}><b>機体を修復</b><span>蓄積ダメージ −50%</span></button><button data-benefit="upgrade" ${r.economy.nodeClaims.includes(current.id) ? "disabled" : ""}><b>武器を強化</b><span>${upgrade ? `${upgrade.name} rank ${upgrade.nextRank}: ${upgrade.description}` : "全強化上限 +20 SCRAP"}</span></button></div>`;
     }
     return `<section class="rogue-actions">${content}</section>`;
   }
@@ -360,12 +364,25 @@ export class RogueliteUI {
       this.mapPosition = position;
     } else mapScroll.scrollTop = oldScroll;
     const detail = this.panel.querySelector<HTMLElement>(".rogue-detail")!;
-    detail.scrollTop = samePosition ? detailScroll : 0;
     const layout = this.panel.querySelector<HTMLElement>(".rogue-layout")!;
+    const actions = this.panel.querySelector<HTMLElement>(".rogue-actions");
+    const choices = this.panel.querySelector<HTMLElement>(".rogue-choices");
+    const departure = this.panel.querySelector<HTMLElement>(".rogue-departure")!;
+    // Open a decision on its choices when the destination summary would push them
+    // out of view (short screens); otherwise show it from the destination heading.
+    const fits = (scroller: HTMLElement, from: number, reserve = 0) =>
+      !choices || choices.offsetTop + choices.offsetHeight - from <= scroller.clientHeight - reserve;
+    detail.scrollTop = samePosition
+      ? detailScroll
+      : actions && !fits(detail, detail.offsetTop)
+        ? actions.offsetTop - detail.offsetTop
+        : 0;
     layout.scrollTop = samePosition
       ? layoutScroll
       : ["node", "reward"].includes(r.phase)
-        ? detail.offsetTop - layout.offsetTop
+        ? (actions && !fits(layout, detail.offsetTop, departure.offsetHeight)
+            ? actions.offsetTop
+            : detail.offsetTop) - layout.offsetTop
         : 0;
     const previous = focusAttribute
       ? this.panel.querySelector<HTMLElement>(

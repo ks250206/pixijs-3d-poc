@@ -97,7 +97,6 @@ export class GameAudio {
         }
         case 'jump': this.tone(170, 400, 0.14, 0.11); break;
         case 'dodge': this.burst(0.12, 2200, 0.12); break;
-        case 'wavedash': this.tone(500, 1200, 0.13, 0.14, 'sine'); this.burst(0.2, 4000, 0.14); break;
         case 'smash': this.tone(95, 32, 0.3, 0.58, 'sawtooth'); this.burst(0.22, 5800, 0.5); break;
         case 'special': this.tone(740, 120, 0.32, 0.22, 'sawtooth'); this.tone(110, 900, 0.18, 0.16); break;
         case 'grab': this.tone(200, 140, 0.07, 0.2, 'square'); break;

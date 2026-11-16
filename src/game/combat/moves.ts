@@ -11,6 +11,22 @@ export type BehaviorId =
   | "area"
   | "mortar";
 export type CancelAction = "attack" | "special" | "jump" | "dodge";
+/**
+ * A strike that sweeps an arc instead of following the weapon's default trajectory.
+ * `vertical` sweeps the plane ahead of the fighter: angles are elevations from the facing direction
+ * (0 forward, π/2 straight up, π behind, negative below). `level` sweeps a horizontal plane:
+ * angles are headings (0 forward, positive toward the near lane), with the blade tilted by `tilt`.
+ * The pivot — the hands — travels from the first height to the second across the sweep.
+ */
+export interface StrikeArc {
+  plane: "vertical" | "level";
+  from: number;
+  to: number;
+  pivotY: readonly [number, number];
+  /** Level sweeps only: constant vertical component of the aim (negative dips toward the floor). */
+  tilt?: number;
+}
+
 export interface MoveDefinition {
   id: string;
   name: string;
@@ -26,6 +42,8 @@ export interface MoveDefinition {
     tip: boolean;
     height: number;
     depth: number;
+    /** Set for up and down normals; replaces `trajectory` on every frame of the move. */
+    arc?: StrikeArc;
   };
   damage: number;
   force: number;
@@ -35,6 +53,15 @@ export interface MoveDefinition {
   combo: number;
   cancels: { on: "hit" | "whiff"; from: number; to: number; actions: readonly CancelAction[] }[];
 }
+/**
+ * Seconds a target stays stunned, at least, after a grounded down normal pops it up — long enough
+ * that even the slowest weapon's up attack arrives while it still cannot act.
+ */
+export const POP_STUN = 0.36;
+/** A grounded down normal: the launcher that leads into an up attack. */
+export const popsUp = (m: MoveDefinition) =>
+  m.direction === "down" && (m.kind === "tilt" || m.kind === "smash") && m.angle > 1;
+
 export const totalFrames = (m: MoveDefinition) =>
   m.frames.startup + m.frames.active + m.frames.recovery;
 export const activeEnd = (m: MoveDefinition) => m.frames.startup + m.frames.active;
@@ -57,6 +84,53 @@ const style: Record<
   cannon: { reach: 1, timing: 1, startup: 1, force: 1, shape: "thrust", radius: 0.4 },
   scythe: { reach: 1.45, timing: 1.35, startup: 1.7, force: 0.72, shape: "orbit", radius: 0.4 },
 };
+
+const DEG = Math.PI / 180;
+const vertical = (from: number, to: number, pivotFrom: number, pivotTo: number): StrikeArc => ({
+  plane: "vertical", from: from * DEG, to: to * DEG, pivotY: [pivotFrom, pivotTo],
+}); // prettier-ignore
+const level = (from: number, to: number, pivot: number, tilt: number): StrikeArc => ({
+  plane: "level", from: from * DEG, to: to * DEG, pivotY: [pivot, pivot], tilt,
+}); // prettier-ignore
+
+/**
+ * How each weapon attacks upward and downward. Degrees; see `StrikeArc`.
+ *
+ * Up: a rising crescent from low in front, over the head and on behind it, the hands travelling
+ * from the hip to overhead — it covers the front, the air above and a little behind, instead of
+ * poking one vertical line.
+ * Down, grounded: a low mowing sweep across both lanes (or an overhead slam, or a full low spin),
+ * launching upward so it leads into an up attack.
+ * Down, airborne: a crescent or wheel under the fighter, still a spike.
+ */
+const ARCS: Record<WeaponId, { up: StrikeArc; airUp: StrikeArc; down: StrikeArc; airDown: StrikeArc }> = {
+  // Pivot heights and end angles are bounded by the body: the hands must be able to hold the
+  // shaft where each weapon is gripped, and a blade passing overhead has to clear the head.
+  arc: {
+    up: vertical(-20, 135, 1.0, 1.75), airUp: vertical(-15, 140, 1.3, 1.75),
+    down: level(-105, 105, 0.55, -0.12), airDown: vertical(-15, -165, 0.95, 0.8),
+  },
+  pile: {
+    up: vertical(10, 128, 1.0, 1.62), airUp: vertical(5, 135, 1.3, 1.62),
+    down: vertical(110, -38, 1.6, 1.0), airDown: vertical(70, -95, 1.6, 1.0),
+  },
+  razor: {
+    up: vertical(-35, 110, 0.9, 1.7), airUp: vertical(-20, 125, 1.25, 1.7),
+    down: level(-80, 80, 0.5, -0.1), airDown: vertical(-30, -150, 0.95, 0.8),
+  },
+  lance: {
+    up: vertical(10, 112, 1.05, 1.6), airUp: vertical(5, 120, 1.3, 1.6),
+    down: level(-55, 55, 0.45, -0.05), airDown: vertical(-65, -105, 1.0, 0.9),
+  },
+  cannon: {
+    up: vertical(0, 120, 1.0, 1.7), airUp: vertical(0, 130, 1.3, 1.7),
+    down: vertical(100, -32, 1.6, 1.0), airDown: vertical(-20, -140, 0.95, 0.8),
+  },
+  scythe: {
+    up: vertical(-30, 140, 1.0, 1.6), airUp: vertical(-20, 150, 1.3, 1.6),
+    down: level(-90, 270, 0.5, -0.06), airDown: vertical(90, -270, 1.15, 1.15),
+  },
+}; // prettier-ignore
 
 /** All normal weapon tuning, timing, collision, pose and executable cancel windows. */
 export function playerMove(
@@ -104,7 +178,12 @@ export function playerMove(
     angle = 1.28;
     reach *= 0.85;
   }
-  if (direction === "down") angle = kind === "aerial" ? -1.15 : 0.28;
+  if (direction === "down") {
+    // In the air a down attack spikes. On the ground it pops the target up, softly enough that
+    // an up attack can follow.
+    angle = kind === "aerial" ? -1.15 : 1.2;
+    if (kind !== "aerial") growth *= 0.7;
+  }
   const s = style[loadout.weapon];
   reach *= s.reach;
   force *= s.force;
@@ -170,6 +249,9 @@ export function playerMove(
       tip: loadout.weapon === "lance",
       height: direction === "up" ? 3.5 : 1.85,
       depth: loadout.weapon === "scythe" ? 2.5 : 1.35,
+      ...((direction === "up" || direction === "down") && (kind === "tilt" || kind === "smash" || kind === "aerial")
+        ? { arc: ARCS[loadout.weapon][direction === "up" ? (kind === "aerial" ? "airUp" : "up") : kind === "aerial" ? "airDown" : "down"] }
+        : {}),
     },
     damage: damage * loadout.power,
     force: force * loadout.power,

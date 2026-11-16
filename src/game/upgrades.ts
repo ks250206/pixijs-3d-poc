@@ -106,6 +106,8 @@ export function upgradeMove(move: MoveDefinition, upgrades: readonly RunUpgrade[
   if (move.pose === 'pile') {
     if (move.kind === 'smash') link(rank('pile-link'), ['dodge', 'special'], result.frames.startup + result.frames.active - rank('pile-link') * 2);
     if (move.kind === 'smash' && move.direction === 'down' && rank('pile-launch')) {
+      // The upgraded slam is a shockwave around the fighter, not the weapon's own arc.
+      delete result.shape.arc;
       result.angle = 1.3; result.shape.trajectory = 'burst'; result.shape.radius += rank('pile-launch') * .25; result.shape.depth = 2.2 + rank('pile-launch') * .3;
     }
   }
@@ -116,6 +118,7 @@ export function upgradeMove(move: MoveDefinition, upgrades: readonly RunUpgrade[
     }
   }
   if (move.pose === 'lance' && move.kind === 'tilt' && move.direction === 'down' && rank('lance-sweep')) {
+    delete result.shape.arc;
     result.shape.trajectory = 'orbit'; result.shape.reach = 2.3 + rank('lance-sweep') * .3; result.shape.radius = .35; result.shape.depth = 2.3; result.shape.tip = false; result.angle = .2;
   }
   if (move.pose === 'scythe' && move.kind === 'smash') link(rank('scythe-link'), ['special', 'dodge'], result.frames.startup + result.frames.active - rank('scythe-link') * 2);

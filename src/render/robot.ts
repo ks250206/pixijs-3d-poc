@@ -361,7 +361,8 @@ export class RobotView {
       const pulse = 1 + Math.sin(time * 28) * 0.06;
       this.warning.scale.set(radius * pulse, 1, radius * pulse);
     }
-    this.shield.visible = actor.state === 'shield' || actor.state === 'airdodge';
+    // A dodge is purely positional now; only an actual shield shows the bubble.
+    this.shield.visible = actor.state === 'shield';
 
     if (this.kind === 'player') {
       for (const gauntlet of this.gauntlets) gauntlet.visible = weapon === 'razor';
@@ -374,7 +375,7 @@ export class RobotView {
       for (const { mesh, material } of this.parts) mesh.material = flash ? this.assets.flash : material;
       this.flashed = flash;
     }
-    if (actor.alive && actor.invulnerable > 0 && actor.state !== 'dodge' && actor.state !== 'airdodge') {
+    if (actor.alive && actor.invulnerable > 0) {
       this.root.visible = Math.floor(time * 16) % 3 !== 0;
     }
 

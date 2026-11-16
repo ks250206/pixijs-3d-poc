@@ -65,7 +65,6 @@ function blendTime(actor: Actor): number {
     case "jump":
     case "dodge":
     case "airdodge":
-    case "wavedash":
       return 0.07;
     case "idle":
     case "run":
@@ -215,7 +214,9 @@ export class RigAnimator {
       // Level aims have a heading; a vertical one has none, so it weighs nothing. A strike straight
       // behind turns through the side facing the camera.
       const level = Math.hypot(aim.x, aim.z);
-      let phi = Math.atan2(aim.x - 1e-6 * actor.facing * Math.max(0, -aim.z), aim.z);
+      const plane = shape.arc?.plane ?? null;
+      // An arc in the vertical plane passes over the head; that is no reason to turn round.
+      let phi = plane === "vertical" ? 0 : Math.atan2(aim.x - 1e-6 * actor.facing * Math.max(0, -aim.z), aim.z);
       phi += Math.round((this.heading - phi) / (Math.PI * 2)) * Math.PI * 2;
       this.heading = phi;
       const wholeTurns = Math.round(phi / (Math.PI * 2)) * Math.PI * 2;
@@ -227,6 +228,7 @@ export class RigAnimator {
         kind: striking.move.kind,
         direction: striking.move.direction,
         trajectory: shape.trajectory,
+        plane,
         clock:
           frame < frames.startup
             ? frame / Math.max(1, frames.startup)

@@ -404,3 +404,160 @@ test("landscape route keeps its departure action visible", async ({ page }) => {
   await page.locator('[data-rogue="travel"]').click();
   await expect(page.locator(".rogue-panel")).toBeHidden();
 });
+
+// Wide map and reward layout: the route uses most of the screen, and every
+// decision screen shows all its choices and its departure without scrolling.
+async function expectUncovered(page: import("@playwright/test").Page, selector: string) {
+  const locator = page.locator(selector);
+  const count = await locator.count();
+  expect(count, selector).toBeGreaterThan(0);
+  for (let i = 0; i < count; i++) {
+    await expect(locator.nth(i)).toBeInViewport({ ratio: 1 });
+    // Nothing (e.g. a sticky departure bar) may sit on top of the control.
+    const covered = await locator.nth(i).evaluate((el) => {
+      const b = el.getBoundingClientRect();
+      return [
+        [b.left + 4, b.top + 4],
+        [b.right - 4, b.bottom - 4],
+        [(b.left + b.right) / 2, (b.top + b.bottom) / 2],
+      ].some(([x, y]) => {
+        const hit = document.elementFromPoint(x!, y!);
+        return !hit || !(hit === el || el.contains(hit));
+      });
+    });
+    expect(covered, `${selector} #${i} is covered`).toBe(false);
+  }
+}
+async function expectNoScroll(page: import("@playwright/test").Page) {
+  const overflow = await page.evaluate(() =>
+    [".rogue-panel", ".rogue-layout", ".rogue-detail"].map((s) => {
+      const el = document.querySelector<HTMLElement>(s)!;
+      return { s, scroll: el.scrollHeight, client: el.clientHeight, w: el.scrollWidth - el.clientWidth };
+    }),
+  );
+  for (const o of overflow) {
+    expect(o.scroll, `${o.s} vertical overflow`).toBeLessThanOrEqual(o.client + 1);
+    expect(o.w, `${o.s} horizontal overflow`).toBeLessThanOrEqual(1);
+  }
+}
+async function enterDecision(
+  page: import("@playwright/test").Page,
+  kind: "reward" | "shop" | "event" | "rest" | "treasure",
+) {
+  await page.evaluate((kind) => {
+    const g = window.__UPRISING__.engine,
+      r = g.run!;
+    if (kind === "reward") {
+      g.selectNode("1-0-0");
+      g.travelNode();
+      g.world.enemies.forEach((e) => {
+        e.alive = false;
+      });
+      g.world.pendingSpawns = [];
+      for (let i = 0; i < 100; i++) g.update(1 / 60);
+      return;
+    }
+    r.map[0]!.kind = kind === "event" ? "unknown" : kind;
+    if (kind === "event") r.events.resolved["1-0-0"] = { kind: "event", eventId: "foundry-union" };
+    r.economy.scrap = 400;
+    g.world.player.damage = 60;
+    g.selectNode("1-0-0");
+    g.travelNode();
+  }, kind);
+}
+const DECISIONS = {
+  reward: "[data-upgrade], [data-rogue=skip]",
+  shop: "[data-buy]",
+  event: "[data-event]",
+  rest: "[data-benefit]",
+  treasure: "[data-benefit]",
+} as const;
+
+for (const [width, height] of [
+  [1440, 900],
+  [1280, 720],
+] as const) {
+  test(`wide route map uses most of a ${width}x${height} screen and shows the whole act`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height });
+    await boot(page);
+    const box = (await page.locator(".rogue-panel").boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(width * 0.85);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(width);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(height);
+    // The graph spreads into the extra width, beside a full destination panel.
+    const graph = (await page.locator(".route-map").boundingBox())!;
+    const detail = (await page.locator(".rogue-detail").boundingBox())!;
+    expect(graph.width).toBeGreaterThanOrEqual(700);
+    expect(detail.x).toBeGreaterThanOrEqual(graph.x + graph.width);
+    expect(
+      await page.locator(".rogue-map-scroll").evaluate((el) => el.scrollHeight <= el.clientHeight + 1),
+    ).toBe(true);
+    await expect(page.locator('[data-node="1-7-0"]')).toBeInViewport({ ratio: 1 });
+    await page.locator('[data-node="1-0-0"]').click();
+    await expectUncovered(page, '[data-node="1-0-0"]');
+    await expectUncovered(page, "[data-rogue=travel]");
+    if (width === 1440) await page.screenshot({ path: "test-results/screenshots/map-wide-1440.png" });
+    await page.locator("[data-rogue=travel]").focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".rogue-panel")).toBeHidden();
+  });
+
+  for (const kind of Object.keys(DECISIONS) as (keyof typeof DECISIONS)[])
+    test(`${kind} choices and departure fit a ${width}x${height} screen without scrolling`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height });
+      await boot(page);
+      await enterDecision(page, kind);
+      await expect(page.locator(DECISIONS[kind]).first()).toBeVisible();
+      expect((await page.locator(".rogue-panel").boundingBox())!.width).toBeGreaterThanOrEqual(
+        width * 0.85,
+      );
+      await expectNoScroll(page);
+      await expectUncovered(page, DECISIONS[kind]);
+      await expectUncovered(page, "[data-rogue=complete]");
+      if (kind === "reward" || kind === "shop")
+        await page.screenshot({ path: `test-results/screenshots/${kind}-wide-${width}.png` });
+      if (kind === "reward") {
+        // Choosing keeps the departure on screen and enables it.
+        await page.locator("[data-upgrade]").first().click();
+        await expect(page.locator("[data-rogue=complete]")).toBeEnabled();
+        await expectNoScroll(page);
+        await expectUncovered(page, "[data-rogue=complete]");
+      }
+    });
+}
+
+test("390px reward opens on the three upgrades with the departure reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await boot(page);
+  await enterDecision(page, "reward");
+  await expect(page.locator("[data-upgrade]")).toHaveCount(3);
+  await expectUncovered(page, "[data-upgrade]");
+  await expectUncovered(page, "[data-rogue=complete]");
+  for (const button of await page.locator("[data-upgrade], [data-rogue=skip]").all())
+    expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/screenshots/reward-mobile-390.png" });
+  await page.locator("[data-upgrade]").first().click();
+  await expectUncovered(page, "[data-rogue=complete]");
+  await page.locator("[data-rogue=complete]").click();
+  await expect(page.locator("[data-rogue=travel]")).toBeVisible();
+});
+
+test("390px shop keeps its departure reachable after scrolling to the last item", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await boot(page);
+  await enterDecision(page, "shop");
+  await expect(page.locator("[data-buy]").first()).toBeVisible();
+  await expectUncovered(page, "[data-rogue=complete]");
+  await page.locator("[data-buy]").last().scrollIntoViewIfNeeded();
+  await expectUncovered(page, "[data-buy] >> nth=-1");
+  await expectUncovered(page, "[data-rogue=complete]");
+});

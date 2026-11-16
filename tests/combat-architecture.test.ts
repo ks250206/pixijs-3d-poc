@@ -113,14 +113,11 @@ describe("dash revision and depth rails", () => {
       expect(p.x * facing).toBeGreaterThan(0.8);
     },
   );
-  it("scales old directional ground and air speeds by exactly two thirds", () => {
-    expect(DODGE.scale).toBe(2 / 3);
-    expect(DODGE.groundX).toBe((12 * 2) / 3);
-    expect(DODGE.groundZ).toBe((8 * 2) / 3);
-    expect(DODGE.air).toBe((18 * 2) / 3);
+  it("launches a directional ground dash at its peak speed, with no invulnerability", () => {
     const g = lab();
     g.update(1 / 60, { ...EMPTY_INPUT, dodge: true, moveX: 1 });
     expect(g.world.player.x).toBeCloseTo(DODGE.groundX / 60);
+    expect(g.world.player.invulnerable).toBe(0);
   });
   it.each([-1, 1])(
     "clamps every living actor at depth %s, including offstage falling bodies",
@@ -278,21 +275,20 @@ describe("executable cancel windows", () => {
 });
 
 describe("dodge travel and airtime", () => {
-  it("matches two thirds of old directional travel before the action ends", () => {
+  it("bursts the ground dash, keeps the air X dash constant, and blocks a second air dash", () => {
     const g = lab();
     g.world.enemies[0]!.z = 3;
     g.update(1 / 60, { ...EMPTY_INPUT, dodge: true, moveX: 1 });
-    tick(g, 17);
-    const old = Array.from({ length: 18 }, (_, i) => (12 / 60) * Math.exp((-3.6 * i) / 60)).reduce(
-      (a, b) => a + b,
-      0,
-    );
-    expect(g.world.player.x / old).toBeCloseTo(2 / 3, 8);
+    tick(g, 21);
+    // Ground: v0 · exp(−burstDecay · t) for the 22 steps of the dash.
+    const r = Math.exp(-DODGE.burstDecay / 60);
+    const burst = Array.from({ length: 22 }, (_, i) => (DODGE.groundX / 60) * r ** i).reduce((a, b) => a + b, 0);
+    expect(g.world.player.x).toBeCloseTo(burst, 8);
     const a = lab();
     a.world.player.y = 5;
     a.update(1 / 60, { ...EMPTY_INPUT, dodge: true, moveX: 1, dodgeHeld: true });
     for (let i = 0; i < 9; i++) a.update(1 / 60, { ...EMPTY_INPUT, dodgeHeld: true });
-    expect(a.world.player.x / ((18 * 10) / 60)).toBeCloseTo(2 / 3, 8);
+    expect(a.world.player.x).toBeCloseTo((DODGE.air * 10) / 60, 8);
     tick(a, 12);
     const before = a.world.player.vx;
     a.update(1 / 60, { ...EMPTY_INPUT, dodge: true, moveX: -1 });

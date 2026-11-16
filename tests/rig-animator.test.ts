@@ -301,9 +301,19 @@ const attacks = (facing: 1 | -1): Attack[] => [
   { label: 'forward tilt', input: { attack: true, moveX: facing }, kind: 'tilt', direction: 'forward' },
   { label: 'up tilt', input: { attack: true, moveZ: -1 }, kind: 'tilt', direction: 'up' },
   { label: 'down tilt', input: { attack: true, moveZ: 1 }, kind: 'tilt', direction: 'down' },
+  // Smashes charge for a frame, then release on the next one (see `startAttack`).
+  { label: 'up smash', input: { smash: true, moveZ: -1 }, kind: 'smash', direction: 'up' },
+  { label: 'down smash', input: { smash: true, moveZ: 1 }, kind: 'smash', direction: 'down' },
   { label: 'neutral aerial', input: { attack: true }, air: true, kind: 'aerial', direction: 'neutral' },
+  { label: 'up aerial', input: { attack: true, moveZ: -1 }, air: true, kind: 'aerial', direction: 'up' },
   { label: 'down aerial', input: { attack: true, moveZ: 1 }, air: true, kind: 'aerial', direction: 'down' },
 ];
+
+/** Presses the attack's input; a smash is released (uncharged) on the next frame. */
+function startAttack(rig: Rig, attack: Attack, pin?: { y: number }) {
+  rig.step(attack.input, pin);
+  if (rig.player.state === 'charge') rig.step({}, pin);
+}
 
 describe('RigAnimator on live player attacks', () => {
   for (const weapon of WEAPONS)
@@ -314,7 +324,7 @@ describe('RigAnimator on live player attacks', () => {
           const rig = new Rig(lab(weapon, facing));
           const pin = attack.air ? { y: 3 } : undefined;
           rig.run(20, {}, pin);
-          rig.step(attack.input, pin);
+          startAttack(rig, attack, pin);
           const p = rig.player;
           expect(p.attack?.kind, attack.label).toBe(attack.kind);
           expect(p.attack?.direction, attack.label).toBe(attack.direction);
@@ -337,7 +347,7 @@ describe('RigAnimator on live player attacks', () => {
       const rig = new Rig(lab(weapon));
       const pin = attack.air ? { y: 3 } : undefined;
       rig.run(20, {}, pin);
-      rig.step(attack.input, pin);
+      startAttack(rig, attack, pin);
       rig.finishAttack(10, {}, pin);
       live += rig.frames.filter((f) => f.held?.live).length;
       mislabelled.push(...rig.mislabelled.map((m) => `${attack.label}: ${m}`));
@@ -461,6 +471,41 @@ describe('RigAnimator trunk after a strike', () => {
     }
     expect(failures).toEqual([]);
   });
+
+  /** Heading of the solved chest about +Y in rig space: the hips' yaw and the chest's own yaw together. */
+  const chestHeading = (f: RigFrame) => {
+    const forward = rotate(f.rig.chest.q, { x: 0, y: 0, z: 1 });
+    return Math.atan2(forward.x, forward.z);
+  };
+
+  for (const facing of [1, -1] as const)
+    it.each(WEAPONS)(`%s facing ${facing}: a vertical-plane up attack (tilt, smash, aerial) swings over and behind the head without yawing the trunk round`, (weapon) => {
+      const failures: string[] = [];
+      for (const attack of attacks(facing).filter((a) => a.direction === 'up')) {
+        const rig = new Rig(lab(weapon, facing));
+        const pin = attack.air ? { y: 3 } : undefined;
+        rig.run(20, {}, pin);
+        startAttack(rig, attack, pin);
+        expect(rig.player.attack?.move?.shape.arc?.plane, attack.label).toBe('vertical');
+        const first = rig.frames.length - 1;
+        rig.finishAttack(0, {}, pin);
+        const during = rig.frames.slice(first).filter((_, i) => rig.keys[first + i]!.startsWith('attack'));
+        expect(during.length, attack.label).toBeGreaterThan(10);
+        // The weapon really does pass behind and above the head…
+        const behind = during.filter((f) => f.held && f.held.b.z < f.rig.head.p.z && f.held.b.y > f.rig.head.p.y);
+        if (!behind.length) failures.push(`${attack.label}: the weapon never passed behind and above the head`);
+        // …and the trunk stays facing forward all the same.
+        const worstChest = Math.max(...during.map((f) => Math.abs(chestHeading(f))));
+        const hips = during.map((f) => {
+          const forward = rotate(f.rig.hips.q, { x: 0, y: 0, z: 1 });
+          return Math.abs(Math.atan2(forward.x, forward.z));
+        });
+        if (!(worstChest < 0.35)) failures.push(`${attack.label}: hips + chest yaw reached ${worstChest.toFixed(3)} rad`);
+        if (!(Math.max(...hips) < 0.35)) failures.push(`${attack.label}: hips yaw reached ${Math.max(...hips).toFixed(3)} rad`);
+        failures.push(...rig.problems.map((m) => `${attack.label}: ${m}`));
+      }
+      expect(failures).toEqual([]);
+    });
 });
 
 describe('RigAnimator continuity', () => {

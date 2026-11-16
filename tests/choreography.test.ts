@@ -9,13 +9,14 @@ const KINDS: AttackKind[] = ['jab', 'tilt', 'smash', 'dash', 'aerial', 'throw', 
 const DIRECTIONS: AttackDirection[] = ['neutral', 'forward', 'back', 'up', 'down'];
 const TRAJECTORIES: Strike['trajectory'][] = ['slash', 'thrust', 'orbit', 'burst'];
 const NON_SPIN: Strike['trajectory'][] = ['slash', 'thrust'];
+const PLANES: Strike['plane'][] = [null, 'vertical', 'level'];
 const STANCE = restPose(rigSpec('player'));
 /** Clock 0 … 3 in 0.05 steps, computed without accumulating error. */
 const CLOCKS = Array.from({ length: 61 }, (_, i) => i / 20);
 
 /** A grounded forward tilt with a level forward aim and no turn, unless overridden. */
 const STRIKE: Strike = {
-  style: 'arc', kind: 'tilt', direction: 'forward', trajectory: 'slash', clock: 0, combo: 0,
+  style: 'arc', kind: 'tilt', direction: 'forward', trajectory: 'slash', plane: null, clock: 0, combo: 0,
   aim: { x: 0, y: 0, z: 1 }, turn: 0, extension: 0.75, duration: 0.4, charge: 0,
   airborne: false, main: 'R', ranged: false, travelling: false,
 }; // prettier-ignore
@@ -100,7 +101,7 @@ describe('strikePose: body motion laid over a stance', () => {
             // Aims include straight up/down (no heading) and large unwrapped turns from spins.
             const aim = [{ x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 }, r.unit()][Math.floor(r.range(0, 4))]!;
             const base = strike({
-              style, kind, direction, trajectory, aim,
+              style, kind, direction, trajectory, aim, plane: PLANES[(flags + d) % PLANES.length] ?? null,
               turn: [0, Math.PI, -Math.PI * 2.5, r.range(-7, 7)][Math.floor(r.range(0, 4))]!,
               extension: r.range(0, 1.3), duration: r.range(0.03, 1.5), charge: r.range(0, 1),
               airborne: !!(flags & 1), main: flags & 2 ? 'L' : 'R', ranged: !!(flags & 4), travelling: !!(flags & 8),
@@ -130,14 +131,14 @@ describe('strikePose: body motion laid over a stance', () => {
     return pose;
   })();
 
-  function residue(trajectories: Strike['trajectory'][], skip: Channel[] = []) {
+  function residue(trajectories: Strike['trajectory'][], skip: Channel[] = [], over: Partial<Strike> = {}) {
     const failures: string[] = [];
     for (const stance of [STANCE, OFF_REST])
       for (const style of STYLES)
         for (const trajectory of trajectories)
           for (const main of ['L', 'R'] as const)
             for (const clock of [0, 3]) {
-              const pose = posed(strike({ style, trajectory, main, clock }), stance);
+              const pose = posed(strike({ style, trajectory, main, clock, ...over }), stance);
               for (const channel of BODY)
                 if (!skip.includes(channel) && !(Math.abs(pose[channel] - stance[channel]) <= 1e-9))
                   failures.push(`${style} ${trajectory} main ${main} clock ${clock}: ${channel} ${pose[channel]} vs stance ${stance[channel]} (Δ ${(pose[channel] - stance[channel]).toExponential(2)})`);
@@ -151,6 +152,14 @@ describe('strikePose: body motion laid over a stance', () => {
 
   it('a grounded spin (orbit/burst) leaves no residue either (its feet are released throughout, so `plant` is exempt)', () => {
     expect(residue(['orbit', 'burst'], ['plant']).slice(0, 12)).toEqual([]);
+  });
+
+  it('authored up/down arcs leave no residue: a vertical arc of any trajectory (it is never a spin) and a level low sweep', () => {
+    const overhead = { x: 0, y: 0.6, z: -0.8 };
+    for (const direction of ['up', 'down'] as const)
+      expect(residue(TRAJECTORIES, [], { plane: 'vertical', direction, aim: overhead }).slice(0, 12), `vertical ${direction}`).toEqual([]);
+    expect(residue(NON_SPIN, [], { plane: 'level', direction: 'down' }).slice(0, 12)).toEqual([]);
+    expect(residue(['orbit', 'burst'], ['plant'], { plane: 'level', direction: 'down' }).slice(0, 12)).toEqual([]);
   });
 
   it('hips load back onto the rear foot around clock 0.6 and drive forward around clock 1.5, for every style', () => {
@@ -220,5 +229,89 @@ describe('strikePose: body motion laid over a stance', () => {
         expect(kick(1.05), `${style} ${trajectory}: kick right after the shot`).toBeLessThan(-0.05);
         for (const clock of [1.05, 1.2, 1.5, 2, 2.5]) expect(kick(clock), `${style} ${trajectory} clock ${clock}`).toBeLessThan(0);
       }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// F. strikePose for authored up/down arcs (`Strike.plane`)
+// ---------------------------------------------------------------------------------------------
+describe('strikePose: authored up/down arcs', () => {
+  /** Rig-space aim at angle `theta` in the fighter's vertical plane: 0 forward (+Z), π/2 up, π behind. */
+  const inPlane = (theta: number) => ({ x: 0, y: Math.sin(theta), z: Math.cos(theta) });
+  /** The weapon style's own trajectory, as playerMove gives it. */
+  const OWN: Record<WeaponId, Strike['trajectory']> = { arc: 'slash', pile: 'slash', razor: 'thrust', lance: 'thrust', cannon: 'thrust', scythe: 'orbit' };
+
+  it('vertical plane with the turn of 0 the animator passes: no hip, chest or head yaw at any clock, for any trajectory, aim or hand', () => {
+    const failures: string[] = [];
+    for (const style of STYLES)
+      for (const trajectory of TRAJECTORIES)
+        for (const [direction, airborne] of [['up', false], ['up', true], ['down', true], ['down', false]] as const)
+          for (const main of ['L', 'R'] as const)
+            for (const theta of [-1.2, 0, 1, Math.PI / 2, 2.4, 3])
+              for (const clock of CLOCKS) {
+                const pose = posed(strike({ style, trajectory, plane: 'vertical', direction, airborne, main, kind: airborne ? 'aerial' : 'tilt', aim: inPlane(theta), turn: 0, clock }));
+                for (const channel of ['hipYaw', 'chestYaw', 'headYaw'] as const)
+                  if (pose[channel] !== STANCE[channel]) failures.push(`${style} ${trajectory} ${direction}${airborne ? ' air' : ''} main ${main} θ ${theta} clock ${clock}: ${channel} ${pose[channel]}`);
+              }
+    expect(failures.slice(0, 8)).toEqual([]);
+  });
+
+  it('vertical plane: the trunk bends back as the aim passes overhead and behind, forward as it sweeps underneath (monotone within the clamp)', () => {
+    for (const style of STYLES)
+      for (const kind of ['tilt', 'smash', 'aerial'] as const)
+        for (const clock of [0.6, 1, 1.5, 2]) {
+          const label = `${style} ${kind} clock ${clock}`;
+          const at = (theta: number) => posed(strike({ style, kind, plane: 'vertical', direction: 'up', airborne: kind === 'aerial', aim: inPlane(theta), clock }));
+          // Monotone across the clamp's range (−1.3 … 2.7 rad): further round, further back.
+          const thetas = Array.from({ length: 41 }, (_, i) => -1.3 + (4 * i) / 40);
+          const chest = thetas.map((t) => at(t).chestPitch),
+            hips = thetas.map((t) => at(t).hipPitch);
+          for (let i = 1; i < thetas.length; i++) {
+            expect(chest[i]!, `${label}: chest at θ ${thetas[i]!.toFixed(2)}`).toBeLessThan(chest[i - 1]!);
+            expect(hips[i]!, `${label}: hips at θ ${thetas[i]!.toFixed(2)}`).toBeLessThan(hips[i - 1]!);
+          }
+          // Against the same strike with a level forward aim (θ = 0, the null plane's neutral): back overhead, forward below.
+          const level = at(0).chestPitch;
+          expect(at(Math.PI / 2).chestPitch, `${label}: overhead`).toBeLessThan(level - 0.05);
+          expect(at(2.5).chestPitch, `${label}: behind`).toBeLessThan(at(Math.PI / 2).chestPitch);
+          expect(at(-1).chestPitch, `${label}: underneath`).toBeGreaterThan(level + 0.05);
+          expect(level, `${label}: θ 0 is the plain strike`).toBeCloseTo(posed(strike({ style, kind, direction: 'up', airborne: kind === 'aerial', aim: inPlane(0), clock })).chestPitch, 12);
+        }
+  });
+
+  it('level plane: a grounded down sweep sinks the hips lower than the same style\'s forward tilt (and than a grounded down slam)', () => {
+    for (const style of STYLES) {
+      const trajectory = OWN[style];
+      const hipY = (over: Partial<Strike>, clock: number) => posed(strike({ style, trajectory, clock, ...over })).hipY;
+      for (const clock of [1.2, 1.5, 1.8, 2.2]) {
+        const sweep = hipY({ plane: 'level', direction: 'down', aim: { x: 0.6, y: -0.1, z: 0.8 } }, clock);
+        const forward = hipY({ direction: 'forward' }, clock);
+        const slam = hipY({ plane: 'vertical', direction: 'down', aim: inPlane(-0.5) }, clock);
+        expect(sweep, `${style} clock ${clock}: sweep vs forward tilt`).toBeLessThan(forward - 0.03);
+        expect(sweep, `${style} clock ${clock}: sweep vs slam`).toBeLessThan(slam - 0.03);
+      }
+      // An aerial down arc is not a mowing sweep: no extra sink in the air.
+      expect(hipY({ plane: 'level', direction: 'down', airborne: true, kind: 'aerial' }, 1.5)).toBe(hipY({ plane: 'vertical', direction: 'down', airborne: true, kind: 'aerial' }, 1.5));
+    }
+  });
+
+  it('an orbit (or burst) weapon swung in the vertical plane is not a spin: feet stay planted, the stance does not pivot, the body is posed exactly as a slash in that plane', () => {
+    const failures: string[] = [];
+    for (const style of STYLES)
+      for (const trajectory of ['orbit', 'burst'] as const)
+        for (const direction of ['up', 'down'] as const)
+          for (const main of ['L', 'R'] as const)
+            for (const clock of CLOCKS) {
+              const over = { style, direction, main, clock, plane: 'vertical' as const, aim: inPlane(2), turn: 0 };
+              const wheel = posed(strike({ ...over, trajectory }));
+              const slash = posed(strike({ ...over, trajectory: 'slash' }));
+              const where = `${style} ${trajectory} ${direction} main ${main} clock ${clock}`;
+              if (wheel.plant !== STANCE.plant) failures.push(`${where}: plant ${wheel.plant}`);
+              const differ = CHANNELS.filter((c) => !Object.is(wheel[c], slash[c]));
+              if (differ.length) failures.push(`${where}: differs from a vertical slash in ${differ.join(', ')}`);
+            }
+    expect(failures.slice(0, 8)).toEqual([]);
+    // The same weapon spun level (no plane) still is a spin: that is what the plane switches off.
+    for (const style of STYLES) expect(posed(strike({ style, trajectory: 'orbit', clock: 1.5, turn: 2 })).plant, style).toBe(0);
   });
 });

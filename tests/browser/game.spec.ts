@@ -64,7 +64,7 @@ test('boots real 3D, selects randomized chassis, and shows a working combat guid
   await page.screenshot({ path: 'test-results/screenshots/01-title.png' });
   await page.locator('.top-actions [data-action=help]').click();
   await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByText('WAVEDASH / 絶', { exact: true })).toBeVisible();
+  await expect(page.getByText('04 / DEFENSE & DASH', { exact: true })).toBeVisible();
   await expect(page.getByText('05 / ENEMY TACTICS', { exact: true })).toBeVisible();
   await expect(page.getByText('06 / ARENA SYSTEMS', { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
@@ -486,7 +486,7 @@ test('shows rolled module details, ground dash label, objectives and phase two i
   await expect.poll(async()=> (await snapshot(page)).lastMove).toBe('GROUND DASH');
   await page.locator('.top-actions [data-action=help]').click();
   await expect(page.getByText(/地上：向いている方向へダッシュ回避/)).toBeVisible();
-  await expect(page.getByText(/旧移動量の約2\/3/)).toBeVisible(); await page.keyboard.press('Escape');
+  await expect(page.getByText(/回避に無敵時間はありません/)).toBeVisible(); await page.keyboard.press('Escape');
   await page.evaluate(({ empty })=>{
     const {engine}=(window as unknown as {__UPRISING__:{engine:GameEngine}}).__UPRISING__;
     engine.start(engine.world.loadout,'campaign');
@@ -774,4 +774,67 @@ test('one weapon model is carried, wound up, lands on the checked capsule and fo
   }
   await page.evaluate(() => (window as unknown as { __UPRISING__: { scene: GameScene } }).__UPRISING__.scene.resize());
   await expectRenderedArena(page); expect(errors).toEqual([]);
+});
+
+test('stage-clear reward dialog shows every choice and its departure without scrolling on wide screens', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await boot(page);
+  await page.locator('[data-action=start]').click();
+  await page.evaluate(() => {
+    const engine = (window as unknown as { __UPRISING__: { engine: { world: WorldState; update: GameEngine['update'] } } }).__UPRISING__.engine;
+    // Same isolated fixture as the stage-clear upgrade test: resolve the first sector without real combat.
+    engine.world.player.invulnerable = 100;
+    for (let i = 0; i < 3600 && engine.world.phase === 'playing'; i++) {
+      engine.world.enemies.forEach((enemy) => { enemy.x = engine.world.arenaMax + 6; });
+      const p = engine.world.player, target = engine.world.props.find(prop => prop.alive && prop.id.startsWith('objective-'));
+      const input = { moveX: 0, moveZ: 0, attack: false, attackHeld: false, smash: false, smashHeld: false, special: false, jump: false, jumpHeld: false, dodge: false, dodgeHeld: false, grab: false, dash: false, pause: false, flickX: 0, flickZ: 0 };
+      if (target) {
+        const dx = target.x - p.x, dz = target.z - p.z;
+        input.moveX = Math.abs(dx) > 1.3 ? Math.sign(dx) : 0; input.moveZ = Math.abs(dz) > .25 ? Math.sign(dz) : 0;
+        if (Math.abs(dx) < 1.8 && Math.abs(dz) < .4) { if (p.facing !== Math.sign(dx)) input.moveX = Math.sign(dx); else input.attack = true; }
+      }
+      engine.update(1 / 60, input);
+    }
+    engine.world.player.damage = 30;
+    engine.world.stocks = 3;
+  });
+  const dialog = page.getByRole('dialog', { name: 'REBELLION ROUTE' });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('[data-upgrade]')).toHaveCount(3);
+  const uncovered = async (selector: string) => {
+    const items = page.locator(selector);
+    expect(await items.count()).toBeGreaterThan(0);
+    for (const item of await items.all()) {
+      await expect(item).toBeInViewport({ ratio: 1 });
+      // The sticky departure row must not sit on top of a choice.
+      expect(await item.evaluate((el) => {
+        const b = el.getBoundingClientRect();
+        return [[b.left + 4, b.top + 4], [b.right - 4, b.bottom - 4]].every(([x, y]) => { const hit = document.elementFromPoint(x!, y!); return !!hit && (hit === el || el.contains(hit)); });
+      }), selector).toBe(true);
+    }
+  };
+  for (const [width, height] of [[1440, 900], [1280, 720]] as const) {
+    await page.setViewportSize({ width, height });
+    const box = (await dialog.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(width * 0.85);
+    expect(box.x + box.width).toBeLessThanOrEqual(width);
+    expect(await dialog.evaluate((el) => el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await uncovered('[data-upgrade]');
+    await uncovered('[data-supply]');
+    await uncovered('[data-action=travel]');
+    if (width === 1280) await page.screenshot({ path: 'test-results/screenshots/classic-reward-wide-1280.png' });
+  }
+  // Phones may scroll, but the three upgrades open in view and the departure stays reachable.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await uncovered('[data-upgrade]');
+  await uncovered('[data-action=travel]');
+  for (const button of await page.locator('[data-upgrade], [data-supply], [data-action=travel]').all()) expect((await button.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await page.screenshot({ path: 'test-results/screenshots/classic-reward-mobile-390.png' });
+  await page.locator('[data-upgrade]').first().click();
+  await expect(page.locator('[data-action=travel]')).toBeEnabled();
+  await page.locator('[data-supply=power]').scrollIntoViewIfNeeded();
+  await uncovered('[data-supply=power]');
+  await uncovered('[data-action=travel]');
+  await page.locator('[data-action=travel]').click();
+  await expect.poll(async () => (await snapshot(page)).sector).toBe(1);
 });

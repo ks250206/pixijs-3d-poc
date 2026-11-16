@@ -44,14 +44,30 @@ const LIVE_EDGE = 0.75;
 
 const sideOf = (move: MoveDefinition) => (move.direction === "back" ? -1 : 1);
 const fixedAim = (move: MoveDefinition) =>
-  move.direction === "up" ||
-  (move.direction === "down" && move.shape.trajectory !== "burst" && move.shape.trajectory !== "orbit");
+  !move.shape.arc &&
+  (move.direction === "up" ||
+    (move.direction === "down" && move.shape.trajectory !== "burst" && move.shape.trajectory !== "orbit"));
+
+/**
+ * Aim of an authored arc at parameter `p`; `p ∈ [0,1]` is the hit window, outside it the sweep
+ * simply continues, which is what the wind-up and the follow-through travel along.
+ */
+export function arcAim(shape: MoveDefinition["shape"], p: number): WeaponPose["aim"] {
+  const arc = shape.arc!;
+  const angle = arc.from + (arc.to - arc.from) * p;
+  if (arc.plane === "vertical") return { x: Math.cos(angle), y: Math.sin(angle), z: 0 };
+  return { x: Math.cos(angle), y: arc.tilt ?? 0, z: Math.sin(angle) * Math.min(1, shape.depth / shape.reach) };
+}
+/** Height of an arc's pivot: it travels across the hit window and holds at either end. */
+const arcPivot = (shape: MoveDefinition["shape"], p: number) =>
+  mix(shape.arc!.pivotY[0], shape.arc!.pivotY[1], clamp(p, 0, 1));
 
 /** Where the strike arc points at parameter `p`; `p ∈ [0,1]` is the live arc itself. */
 function strikeAim(move: MoveDefinition, p: number): WeaponPose["aim"] {
   const { shape, direction } = move;
   const sign = sideOf(move);
   const live = clamp(p, 0, 1);
+  if (shape.arc) return arcAim(shape, p);
   if (fixedAim(move)) {
     // Vertical strikes hold one line while live; they swing onto it and carry on past it.
     const [x, y, swingIn, swingOut] =
@@ -94,6 +110,11 @@ function strikeAim(move: MoveDefinition, p: number): WeaponPose["aim"] {
 
 /** How far the wind-up cocks back along the arc, and the most a follow-through may overshoot. */
 function arcLimits(move: MoveDefinition): { cock: number; follow: number; cocked: number } {
+  if (move.shape.arc) {
+    // Wind back a set angle whatever the sweep's size: a full spin needs proportionally little.
+    const sweep = Math.abs(move.shape.arc.to - move.shape.arc.from);
+    return { cock: -Math.min(0.32, 0.75 / sweep), follow: Math.min(0.3, 0.6 / sweep), cocked: 0.5 };
+  }
   if (fixedAim(move)) return { cock: -1, follow: 0.7, cocked: 0.52 };
   switch (move.shape.trajectory) {
     case "slash": {
@@ -154,8 +175,10 @@ const CARRY = 0.55;
 export function weaponPose(move: MoveDefinition, frame: number): WeaponPose {
   const { frames, shape } = move;
   const end = activeEnd(move);
-  const sign = sideOf(move);
-  const strikeY = shape.trajectory === "burst" ? Math.min(1, shape.height / 2) : PIVOT_Y;
+  const sign = shape.arc ? 1 : sideOf(move);
+  /** Pivot height while the weapon is on its strike path, at path parameter `p`. */
+  const strikeY = (p: number) =>
+    shape.arc ? arcPivot(shape, p) : shape.trajectory === "burst" ? Math.min(1, shape.height / 2) : PIVOT_Y;
   // At rest the weapon is its natural length, whatever this move's reach is.
   const restExtension = WEAPON_REST[move.pose].length / Math.max(0.1, shape.reach);
   const rest = restAim(move);
@@ -171,7 +194,7 @@ export function weaponPose(move: MoveDefinition, frame: number): WeaponPose {
       aim: strikeAim(move, t),
       extension: LIVE_EDGE + 0.25 * Math.sin(t * Math.PI),
       pivotX: sign * PIVOT_X,
-      pivotY: strikeY,
+      pivotY: strikeY(t),
     };
   }
 
@@ -189,7 +212,7 @@ export function weaponPose(move: MoveDefinition, frame: number): WeaponPose {
     const p = u <= draw ? mix(limits.cock * 0.5, limits.cock, drawn) : limits.cock * (1 - out ** power);
     let cocked = Math.min(limits.cocked, LIVE_EDGE);
     // A thrust is drawn back shorter than it is carried, or there is nothing to throw.
-    if (shape.trajectory === "thrust" && !fixedAim(move)) cocked = Math.min(cocked, restExtension * 0.7);
+    if (shape.trajectory === "thrust" && !shape.arc && !fixedAim(move)) cocked = Math.min(cocked, restExtension * 0.7);
     if (cocked < restExtension) cocked = mix(restExtension, cocked, depth);
     const reachOut = clamp((0.25 * Math.PI * liveSpeed * release) / Math.max(1e-3, LIVE_EDGE - cocked), 1.2, 4);
     const blend = smooth(u / 0.5);
@@ -198,7 +221,7 @@ export function weaponPose(move: MoveDefinition, frame: number): WeaponPose {
       extension:
         u <= draw ? mix(restExtension, cocked, drawn) : cocked + (LIVE_EDGE - cocked) * out ** reachOut,
       pivotX: PIVOT_X * mix(1, sign, blend),
-      pivotY: mix(PIVOT_Y, strikeY, blend),
+      pivotY: mix(PIVOT_Y, strikeY(p), blend),
     };
   }
 
@@ -213,11 +236,12 @@ export function weaponPose(move: MoveDefinition, frame: number): WeaponPose {
   // Start home early: the heavier swings have a long way back and should not rush it.
   const settle = smooth((u - 0.25) / 0.75);
   // A thrust snaps back past its guard before settling: the recoil.
-  const recoil = shape.trajectory === "thrust" && !fixedAim(move) ? Math.sin(Math.PI * smooth(u)) * 0.07 : 0;
+  const recoil =
+    shape.trajectory === "thrust" && !shape.arc && !fixedAim(move) ? Math.sin(Math.PI * smooth(u)) * 0.07 : 0;
   return {
     aim: turn(strikeAim(move, p), rest, settle),
     extension: Math.max(0.12, mix(LIVE_EDGE, restExtension, smooth(u)) - recoil),
     pivotX: PIVOT_X * mix(sign, 1, settle),
-    pivotY: mix(strikeY, PIVOT_Y, settle),
+    pivotY: mix(strikeY(p), PIVOT_Y, settle),
   };
 }

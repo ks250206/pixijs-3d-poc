@@ -1,6 +1,6 @@
 import type { Actor } from "../types";
 import { activeEnd, type MoveDefinition } from "./moves";
-import { weaponPose } from "./trajectory";
+import { arcAim, weaponPose } from "./trajectory";
 export interface Vec3 {
   x: number;
   y: number;
@@ -59,6 +59,17 @@ export function sampleWeapon(
   }
   const t = clamp((frame - frames.startup) / Math.max(1, frames.active), 0, 1);
   const extension = 0.75 + 0.25 * Math.sin(t * Math.PI);
+  if (shape.arc) {
+    // Up and down normals sweep an authored arc; the hands travel with it.
+    const aim = arcAim(shape, t);
+    const origin = { x: actor.x + actor.facing * 0.3, y: actor.y + mix(shape.arc.pivotY[0], shape.arc.pivotY[1], t), z: actor.z };
+    const reach = shape.reach * extension;
+    return {
+      a: origin,
+      b: { x: origin.x + actor.facing * aim.x * reach, y: origin.y + aim.y * reach, z: origin.z + aim.z * reach },
+      radius: shape.radius,
+    };
+  }
   const sign = direction === "back" ? -1 : 1;
   let vx = sign,
     vy = 0,

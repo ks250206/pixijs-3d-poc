@@ -65,7 +65,7 @@ export function runCampaignInputs(
           const approachX = Math.max(w.arenaMin + 2.5, Math.min(w.arenaMax - 2.5, target.x)) - p.x;
           input.moveX = Math.abs(approachX) > 2.1 ? Math.sign(approachX) : 0;
           input.moveZ = Math.abs(dz) > 0.6 ? Math.sign(dz) : 0;
-          const canAct = ["idle", "run", "jump", "fall", "wavedash"].includes(p.state);
+          const canAct = ["idle", "run", "jump", "fall"].includes(p.state);
           const danger = w.hazards.filter((h) => !h.hit && h.delay - h.elapsed < 1.2);
           if (canAct && danger.some((h) => insideHazard(h, p.x, p.z))) {
             const safe = [] as { x: number; z: number; distance: number }[];

@@ -1,11 +1,18 @@
 import type { Actor } from '../game/types';
+import { ASSISTED_LANE_DEPTH } from '../game/combat/assist';
 
 export interface ScreenRect { left: number; top: number; right: number; bottom: number }
 export interface LabelAnchor { id: string; x: number; y: number; width: number; height: number; priority: number }
 export interface LabelPlacement extends LabelAnchor { visible: boolean }
 
-/** Depth guidance is a positioning aid, not a promise that every move will connect. */
-export const SAME_LANE_DISTANCE = 0.65;
+/**
+ * The depth band and enemy rings mark enemies within this |Δz| of the player: a standard enemy's
+ * body half-depth plus the player's lane assist (`PLAYER_LANE_ASSIST`), currently 0.73. Inside it,
+ * any player strike that reaches the enemy in X and height connects; reach, height, timing and
+ * larger or smaller bodies still matter, so it is a positioning aid, not a promise that every
+ * move will connect.
+ */
+export const SAME_LANE_DISTANCE = ASSISTED_LANE_DEPTH;
 export const sameLane = (a: Pick<Actor, 'z'>, b: Pick<Actor, 'z'>): boolean => Math.abs(a.z - b.z) <= SAME_LANE_DISTANCE;
 
 export function overlaps(a: ScreenRect, b: ScreenRect, padding = 0): boolean {
