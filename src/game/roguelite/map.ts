@@ -158,7 +158,7 @@ export function encounterRoster(run: RunState, node: MapNode): ActorKind[] {
         ? ["warden", "sentinel", "gunner"]
         : ["warden", "scout"];
   if (node.act === 1 && node.row === 0 && node.kind === "battle")
-    return ["scout", "scout", "gunner"];
+    return [...STAGES[0]!.waves[0]!.enemies];
   const stage = STAGES[node.theme]!;
   const random = seededRandom(nodeSeed(run.seed, `encounter:${node.id}`));
   const templates = stage.waves.filter(

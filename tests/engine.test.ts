@@ -46,7 +46,7 @@ describe('combat and blast zones', () => {
     const target = game.world.enemies[0]!;
     game.update(1 / 60, frame({ attack: true, attackHeld: true }));
     step(game, 12, { attackHeld: true });
-    expect(target.damage).toBeCloseTo(playerMove(game.world.loadout, 'jab', 'neutral', 0, 0).damage);
+    expect(target.damage).toBeCloseTo(playerMove(game.world.loadout, 'jab', 'neutral', 0, 0).damage * 0.9);
     expect(target.alive).toBe(true);
     target.damage = 900;
     target.vx = 0; target.vy = 0; target.vz = 0;
@@ -278,9 +278,9 @@ describe('campaign', () => {
     }
     const boss = game.world.enemies.find((enemy) => enemy.kind === 'boss')!;
     expect(boss).toBeDefined();
-    expect(boss.armor).toBeGreaterThan(0);
+    expect(boss.armor).toBe(405);
     game.world.mode = 'training'; // Isolate armor/launch mechanics from the boss AI.
-    for (let attempt = 0; attempt < 3 && boss.armor > 0; attempt++) {
+    for (let attempt = 0; attempt < 10 && boss.armor > 0; attempt++) {
       game.world.player.x = game.world.sector * SECTOR_SPAN - 2; game.world.player.z = 0; game.world.player.y = 0;
       game.world.player.vx = 0; game.world.player.vy = 0;
       boss.x = game.world.sector * SECTOR_SPAN; boss.z = 0; boss.y = 0; boss.vx = 0; boss.vy = 0;
@@ -313,7 +313,7 @@ describe('campaign', () => {
   it('can complete the full campaign using only ordinary control inputs', () => {
     const game = new GameEngine(73);
     game.start(createCandidates(73).find((choice) => choice.weapon === 'pile')!);
-    const objectives = runCampaignInputs(game, 60 * 900);
+    const objectives = runCampaignInputs(game, 60 * 1500);
     expect(objectives).toEqual([0, 2, 5]);
     expect(game.world.phase, JSON.stringify({ sector: game.world.sector, wave: game.world.wave, kills: game.world.kills, damage: game.world.player.damage })).toBe('won');
     expect(game.world.kills).toBeGreaterThanOrEqual(STAGES.flatMap((stage) => stage.waves.flatMap((wave) => wave.enemies)).length);
@@ -378,8 +378,8 @@ describe('enemy tactics', () => {
     expect(game.world.projectiles.length).toBe(1);
     game.world.player.z = 3.5;
     step(game, 25);
-    expect(target.damage).toBeCloseTo(15 * game.world.loadout.power * 0.12);
-    expect(target.guard).toBeCloseTo(40 - 15 * game.world.loadout.power);
+    expect(target.damage).toBeCloseTo(15 * game.world.loadout.power * 0.9 * 0.12);
+    expect(target.guard).toBeCloseTo(40 - 15 * game.world.loadout.power * 0.9);
   });
 
   it('keeps a rear projectile unblocked when its owner moves in front of the shield', () => {
@@ -391,7 +391,7 @@ describe('enemy tactics', () => {
     expect(game.world.projectiles.length).toBe(1);
     game.world.player.x = 8;
     step(game, 25);
-    expect(target.damage).toBeCloseTo(15 * game.world.loadout.power);
+    expect(target.damage).toBeCloseTo(15 * game.world.loadout.power * 0.9);
     expect(target.guard).toBe(40);
     expect(game.world.combo).toBe(1);
   });

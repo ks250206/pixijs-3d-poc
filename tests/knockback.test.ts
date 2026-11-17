@@ -28,19 +28,22 @@ function smash(percent: number, weapon: WeaponId = 'arc', kind: ActorKind = 'sco
 }
 
 describe('enemy knockback at low damage', () => {
-  it.each(['arc', 'pile', 'razor', 'lance', 'cannon', 'scythe'] as const)('keeps a fresh enemy near midfield after a full-power %s smash', (weapon) => {
+  it.each(['arc', 'pile', 'razor', 'lance', 'cannon', 'scythe'] as const)('keeps a fresh enemy onstage after a full-power %s smash', (weapon) => {
     const result = smash(0, weapon, 'scout', 1.5);
     expect(result.damage).toBeGreaterThan(25);
     expect(result.alive, JSON.stringify(result)).toBe(true);
-    // Even a boosted full charge leaves at least four units before the edge.
-    expect(result.distance, JSON.stringify(result)).toBeLessThan(7);
+    // A boosted first hit travels further but still leaves room before the edge.
+    expect(result.distance, JSON.stringify(result)).toBeLessThan(12.5);
   });
 
   it('ramps up launch as damage builds and still finishes a heavily damaged enemy', () => {
-    const fresh = smash(0), chipped = smash(50), damaged = smash(100);
-    expect(chipped.launch).toBeGreaterThan(fresh.launch * 2);
-    expect(damaged.launch).toBeGreaterThan(chipped.launch * 1.5);
-    expect(damaged.alive).toBe(false);
+    const fresh = smash(0), chipped = smash(50), damaged = smash(100), finisher = smash(200);
+    expect(fresh.launch).toBeGreaterThan(8);
+    expect(chipped.launch).toBeGreaterThan(fresh.launch);
+    expect(chipped.launch).toBeLessThan(fresh.launch * 1.9);
+    expect(damaged.launch).toBeGreaterThan(chipped.launch);
+    expect(damaged.launch).toBeLessThan(chipped.launch * 1.5);
+    expect(finisher.alive).toBe(false);
     expect(fresh.damage).toBeCloseTo(damaged.damage);
   });
 
@@ -60,8 +63,9 @@ describe('enemy knockback at low damage', () => {
       return target.vy;
     });
     expect(velocities[0]).toBeGreaterThan(0);
-    expect(velocities[0]).toBeLessThan(5);
-    expect(velocities[1]).toBeGreaterThan(velocities[0]! * 4);
+    expect(velocities[0]).toBeGreaterThan(5);
+    expect(velocities[1]).toBeGreaterThan(velocities[0]!);
+    expect(velocities[1]).toBeLessThan(velocities[0]! * 3);
   });
 
   it('preserves the force of enemy attacks against a fresh player', () => {

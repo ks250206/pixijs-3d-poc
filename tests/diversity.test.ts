@@ -287,7 +287,7 @@ describe("protected transition and intentional objectives", () => {
     expect(boss.bossPhase).toBe("transition");
     while (
       g.world.player.attack &&
-      (g.world.player.attack.elapsed * 60 < g.world.player.attack.move!.frames.startup + 4 ||
+      (g.world.player.attack.elapsed * 60 < g.world.player.attack.move!.frames.startup + 10 ||
         g.world.hitstop > 0)
     )
       tick(g);

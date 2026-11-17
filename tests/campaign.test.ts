@@ -175,7 +175,8 @@ describe('specialist encounters', () => {
     tick(game);
     expect(minions.every((enemy) => enemy.state === 'hurt' && enemy.leaderId === null)).toBe(true);
     tick(game, 90);
-    expect(game.world.enemies.filter((enemy) => enemy.kind === 'minion').length).toBeLessThanOrEqual(2);
+    expect(game.world.enemies.filter((enemy) => enemy.leaderId === captain.id)).toHaveLength(0);
+    expect(minions.every((enemy) => enemy.leaderId === null)).toBe(true);
   });
 
   it('uses an armored midboss without ending the campaign on its defeat', () => {

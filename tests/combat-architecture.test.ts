@@ -227,7 +227,7 @@ describe("executable cancel windows", () => {
         p = g.world.player;
       g.world.enemies[0]!.x = hit ? 1.4 : 8;
       g.update(1 / 60, { ...EMPTY_INPUT, attack: true });
-      while (p.attack && p.attack.elapsed * 60 < p.attack.move!.frames.startup + 4) tick(g, 1);
+      while (p.attack && p.attack.elapsed * 60 < p.attack.move!.frames.startup + 10) tick(g, 1);
       const before = p.attack!;
       expect(g.world.enemies[0]!.damage > 0).toBe(hit);
       g.update(1 / 60, { ...EMPTY_INPUT, attack: true });
@@ -327,7 +327,7 @@ describe("simultaneous-input cancel routing", () => {
     g.update(1 / 60, { ...EMPTY_INPUT, attack: true });
     while (
       p.attack &&
-      (p.attack.elapsed * 60 < p.attack.move!.frames.startup + 4 || g.world.hitstop > 0)
+      (p.attack.elapsed * 60 < p.attack.move!.frames.startup + 10 || g.world.hitstop > 0)
     )
       tick(g, 1);
     expect(g.world.enemies[0]!.damage).toBeGreaterThan(0);
@@ -352,7 +352,7 @@ describe("simultaneous-input cancel routing", () => {
     g.update(1 / 60, { ...EMPTY_INPUT, attack: true });
     while (
       p.attack &&
-      (p.attack.elapsed * 60 < p.attack.move!.frames.startup + 4 || g.world.hitstop > 0)
+      (p.attack.elapsed * 60 < p.attack.move!.frames.startup + 10 || g.world.hitstop > 0)
     ) {
       p.y = 6;
       p.vy = 0;

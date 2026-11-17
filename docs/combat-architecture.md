@@ -110,7 +110,7 @@ Robots are rigid-part hierarchies: no skinning or glTF. There is no wrist joint;
 
 ## Cancels
 
-Normals permit attack/special/jump/dodge cancels after a confirmed fighter hit and the authored frame threshold. Whiffs permit only a late recovery dodge when enough recovery remains; very short quick jabs have no whiff cancel. Empty/reversed windows are omitted. Smashes retain their recovery unless an acquired weapon upgrade explicitly adds a hit-confirmed cancel. Utility/enemy moves retain their recovery. Cancel eligibility is checked before discarding the old move, including offensive special cooldown, remaining jumps, one air dodge per airtime, and used up-special recovery. Up-special checks its own airtime allowance, independently of offensive cooldown. Hurt/grab states cannot bypass those gates. Only the single approved cancel action is routed to execution, even with simultaneous buttons. Every new swing gets a fresh hit set; every projectile retains its own hit set.
+Normals permit attack/special/jump/dodge cancels after a confirmed fighter hit and the authored frame threshold. Normal recovery and offensive (attack/special) cancel thresholds gain six frames; jump/dodge thresholds and startup/active geometry keep their original timing. Whiffs permit only a late recovery dodge when enough recovery remains. Empty/reversed windows are omitted. Smashes retain their recovery unless an acquired weapon upgrade explicitly adds a hit-confirmed cancel. Utility/enemy moves retain their recovery. Cancel eligibility is checked before discarding the old move, including offensive special cooldown, remaining jumps, one air dodge per airtime, and used up-special recovery. Up-special checks its own airtime allowance, independently of offensive cooldown. Hurt/grab states cannot bypass those gates. Only the single approved cancel action is routed to execution, even with simultaneous buttons. Every new swing gets a fresh hit set; every projectile retains its own hit set.
 
 ## Input and aerial control
 
@@ -150,3 +150,13 @@ Normal enemy labels prioritize telegraphs, bosses and nearby/hit actors, cap the
 - Durations (0.36 / 0.32 s), cancel windows and buffering are unchanged. The simulation's fixed 60 Hz step makes every dash deterministic and independent of the render frame rate.
 
 Living actors clamp to Z ±3.8 immediately after displacement **before floor crossing**, and again after props and grabs. Outward velocity is removed. Rail-adjacent obstacle resolution selects a legal side rather than pushing through a rail. There is no depth ring-out. X ring-outs, downward crossing from above, under-platform falling, vertical blast zones and enemy/player recovery remain separate.
+
+## Horde balance tuning
+
+Player-sourced fighter damage is multiplied by 0.9 once in `hit`, covering melee, projectiles, throws and upgrade follow-ups before armor, shields and relic modifiers. Authored move damage remains the base value; prop damage and neutral environmental damage are unchanged. Boss/warden starting armor is 405/210.
+
+Enemy launch resistance is `0.5 + 0.5 * clamp(preHitDamage / 200, 0, 1)` and the damage-growth term uses 65% of its authored value. This raises fresh-target launch and softens the ramp, including above 100%. Player launch calculation is unchanged. Weight, armor and launch directions still apply.
+
+Dash attacks launch at 9 and decay at 8/s. Hit cancels into a normal cannot re-trigger a dash attack, and the dash-run timer is consumed on dash-attack start. Phase travel starts at 12 (cross/focused) or 8 (push/split), then decays at 14/s once the 0.28 s forced-motion window ends, on the ground and in the air.
+
+Campaign mixed rosters gain at least three minions (roughly 50% for larger formations); the roguelite opening uses the same opening roster. Training and solo boss rosters are preserved. Formations below eight deploy immediately; larger formations retain four-unit staggered arrivals and the existing live-enemy cap. The director keeps compatible-threat and escape-lane rules, with the post-attack gap shortened to 0.4 s (single) / 0.6 s (pair), regroup time to 0.5 s, and individual enemy cooldowns reduced. Telegraph and active durations are unchanged.
