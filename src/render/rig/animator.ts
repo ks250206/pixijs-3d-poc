@@ -1,6 +1,7 @@
 import type { Capsule } from "../../game/combat/geometry";
 import { PIVOT_X, PIVOT_Y, WEAPON_REST } from "../../game/combat/trajectory";
 import type { Actor, ActorKind, WeaponId } from "../../game/types";
+import { wieldsWeapon } from "../../game/bestiary";
 import type { Strike } from "./choreography";
 import { FootPlanter, GAIT, type RootFrame } from "./gait";
 import {
@@ -23,6 +24,7 @@ import {
   CHANNELS,
   restPose,
   rigSpec,
+  isHeavyFrame,
   solveRig,
   type AimConstraint,
   type CorePose,
@@ -147,8 +149,7 @@ export class RigAnimator {
 
   constructor(private readonly kind: ActorKind) {
     this.spec = rigSpec(kind);
-    const heavy = kind === "boss" || kind === "warden" || kind === "bruiser" || kind === "sentinel";
-    this.planter = new FootPlanter(heavy ? GAIT.heavy : GAIT.light);
+    this.planter = new FootPlanter(isHeavyFrame(kind) ? GAIT.heavy : GAIT.light);
     this.mounted = kind === "rider";
     this.restChestY = this.spec.hipsY + restPose(this.spec).hipY;
   }
@@ -198,7 +199,8 @@ export class RigAnimator {
     // --- What the body is striking with, read off the simulation's move and its segment.
     const move = actor.state === "attack" ? actor.attack?.move : undefined;
     const striking = move && capsule && move.behavior !== "none" ? { move, capsule } : null;
-    const player = this.kind === "player";
+    // The mirror is built on the player's chassis and holds the same weapon.
+    const player = wieldsWeapon(this.kind);
     const main: "L" | "R" =
       player && striking && striking.move.pose === "razor" && actor.attack!.combo % 2 === 1 ? "L" : "R";
     let strike: Strike | null = null;

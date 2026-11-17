@@ -43,9 +43,13 @@ export interface RigSpec {
   headY: number;
 }
 
+/** Broad, slow chassis: wider hips and shoulders, and the heavy gait. */
+export const isHeavyFrame = (kind: ActorKind): boolean =>
+  ["boss", "warden", "bruiser", "sentinel", "mauler", "gargoyle"].includes(kind);
+
 export function rigSpec(kind: ActorKind): RigSpec {
   const boss = kind === "boss" || kind === "warden";
-  const heavy = boss || kind === "bruiser" || kind === "sentinel";
+  const heavy = isHeavyFrame(kind);
   const width = boss ? 1.12 : heavy ? 0.86 : 0.64;
   return {
     hipsY: 0.95,

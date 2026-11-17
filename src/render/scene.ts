@@ -24,6 +24,7 @@ import { attackMotion } from './motion';
 import { ARENA_HALF_WIDTH, SECTOR_SPAN, STAGES } from '../game/campaign';
 import { RobotView } from './robot';
 import type { RobotAssets } from './robot';
+import { isBossKind, isCreature, wieldsWeapon } from '../game/bestiary';
 import { loadGraphics, normalizeGraphics, saveGraphics, sceneResolution, type GraphicsSettings, type GraphicsState } from './graphics';
 import { overlaps, placeCombatLabels, sameLane, SAME_LANE_DISTANCE, type LabelAnchor, type ScreenRect } from './readability';
 
@@ -44,6 +45,14 @@ const COLORS: Record<ActorKind, number> = {
   sapper: 0xffdd75,
   warden: 0xff768f,
   boss: 0xff654d,
+  hound: 0xff8a5c,
+  gunhound: 0xffc04d,
+  roller: 0x8fd0ff,
+  mauler: 0xff7d3c,
+  jester: 0xe86bff,
+  talon: 0x9dffe0,
+  mirror: 0xff4f78,
+  gargoyle: 0xffa040,
 };
 
 interface ActorView {
@@ -190,6 +199,14 @@ export class GameScene {
       sapper: this.material(0x9e8137, 0.6, 0.35),
       warden: this.material(0x735569, 0.45, 0.6),
       boss: this.material(0x424d60, 0.42, 0.65),
+      hound: this.material(0x7d4a3a, 0.55, 0.45),
+      gunhound: this.material(0x6b5a34, 0.55, 0.45),
+      roller: this.material(0x4a5f78, 0.4, 0.7),
+      mauler: this.material(0x5c3a2c, 0.6, 0.45),
+      jester: this.material(0x5a3a78, 0.5, 0.35),
+      talon: this.material(0x3c6b66, 0.45, 0.5),
+      mirror: this.material(0x2b2233, 0.42, 0.55),
+      gargoyle: this.material(0x565a63, 0.85, 0.15),
     };
     this.assets = {
       cube: this.cube,
@@ -698,7 +715,7 @@ export class GameScene {
       text: '0%',
       style: {
         fontFamily: 'monospace',
-        fontSize: actor.kind === 'boss' ? 20 : actor.kind === 'minion' ? 12 : 14,
+        fontSize: actor.kind === 'boss' ? 20 : isBossKind(actor.kind) ? 16 : actor.kind === 'minion' ? 12 : 14,
         fontWeight: '800',
         fill: COLORS[actor.kind],
         stroke: { color: 0x07111c, width: 4 },
@@ -708,8 +725,10 @@ export class GameScene {
     });
     label.anchor.set(0.5, 1);
     this.labels.addChild(label);
-    const slash = this.mesh(this.view.root, actor.kind === 'player' ? this.cube : this.slashGeometry, actor.kind === 'player' ? this.material(0x79cfff, .4, 0, .16) : this.assets.glow[actor.kind], 0, 0, 0);
-    const slashEdge = this.mesh(this.view.root, actor.kind === 'player' ? this.cube : this.slashGeometry, actor.kind === 'player' ? this.material(0xffffff, .4, 0, .08) : this.assets.flash, 0, 0, 0);
+    // Weapon wielders trail their real blade segment; other enemies draw a stylised arc.
+    const wielder = wieldsWeapon(actor.kind);
+    const slash = this.mesh(this.view.root, wielder ? this.cube : this.slashGeometry, wielder ? this.material(actor.kind === 'player' ? 0x79cfff : COLORS[actor.kind], .4, 0, .16) : this.assets.glow[actor.kind], 0, 0, 0);
+    const slashEdge = this.mesh(this.view.root, wielder ? this.cube : this.slashGeometry, wielder ? this.material(0xffffff, .4, 0, .08) : this.assets.flash, 0, 0, 0);
     slash.visible = slashEdge.visible = false;
     const charge = this.mesh(this.view.root, this.ring, this.assets.glow[actor.kind], 0, 0, 0);
     charge.visible = false;
@@ -775,8 +794,10 @@ export class GameScene {
   private updateActor(actor: Actor, world: WorldState): void {
     const view = this.actors.get(actor.id) ?? this.makeActor(actor);
     view.robot.update(actor, world.time, world.loadout.weapon);
-    const boss = actor.kind === 'boss' || actor.kind === 'warden';
-    const point = this.view.worldToScreen({ x: actor.x, y: actor.y + actor.scale * (actor.kind === 'drone' ? 1.6 : boss ? 2.45 : 2.3), z: actor.z });
+    const boss = isBossKind(actor.kind);
+    // Floor warnings of large bodies are drawn wider.
+    const big = actor.kind === 'boss' || actor.kind === 'warden' || actor.kind === 'gargoyle' || actor.kind === 'mauler';
+    const point = this.view.worldToScreen({ x: actor.x, y: actor.y + actor.scale * (isCreature(actor.kind) ? 1.6 : boss ? 2.45 : 2.3), z: actor.z });
     const detailed = this.debugDetails && world.mode === 'training';
     const nearby = Math.abs(actor.x - world.player.x) < 7;
     view.label.visible = actor.alive && point !== null && world.phase !== 'ready' && actor.kind !== 'player'
@@ -791,7 +812,7 @@ export class GameScene {
     const attack = actor.attack;
     view.slash.visible = view.slashEdge.visible = actor.alive && attack !== null && actor.state === 'attack';
     if (attack) {
-      const style = actor.kind === 'player' ? world.loadout.weapon : actor.kind === 'boss' || actor.kind === 'warden' || actor.kind === 'bruiser' ? 'pile' : 'arc';
+      const style = wieldsWeapon(actor.kind) ? world.loadout.weapon : big || actor.kind === 'bruiser' ? 'pile' : 'arc';
       const motion = attackMotion(attack, style);
       const strength = attack.kind === 'smash' ? 1.55 : attack.kind === 'special' ? 1.7 : 1;
       const scale = Math.min(3.8, attack.range * 0.7) * strength * (0.75 + Math.sin(motion.swing * Math.PI) * 0.25);
@@ -804,7 +825,7 @@ export class GameScene {
           slash.scale.set(scale * facing, 0.16, 1);
           slash.rotation.set(0, attack.direction === 'back' ? Math.PI : 0, 0);
         }
-        if (actor.kind === 'player' && attack.move) {
+        if (wieldsWeapon(actor.kind) && attack.move) {
           const capsule = attack.collision?.capsule ?? sampleWeapon(actor, attack.move, attack.elapsed * 60);
           placeSegment(slash, capsule);
           slash.position.set((capsule.a.x + capsule.b.x) / 2, (capsule.a.y + capsule.b.y) / 2, (capsule.a.z + capsule.b.z) / 2);
@@ -819,14 +840,14 @@ export class GameScene {
       const ranged = ['projectile', 'cannon'].includes(attack.move?.behavior ?? '');
       const rush = attack.move?.behavior === 'rush';
       const radial = attack.direction === 'down';
-      const length = ranged ? 13 : rush ? 7.5 : radial ? attack.range * 2 : attack.range;
+      const length = ranged ? 13 : rush ? (actor.kind === 'hound' || actor.kind === 'talon' ? 5 : 7.5) : radial ? attack.range * 2 : attack.range;
       const angle = ranged && actor.aim ? Math.atan2(actor.aim.z - actor.z, actor.aim.x - actor.x) : actor.facing > 0 ? 0 : Math.PI;
-      const width = ranged ? (boss ? 3 : 0.42) : rush ? 1.6 : radial ? (boss ? 7 : 4) : boss ? 5.8 : 2.4;
+      const width = ranged ? (actor.kind === 'boss' ? 3 : 0.42) : rush ? 1.6 : radial ? (big ? 7 : 4) : big ? 5.8 : 2.4;
       view.danger.position.set(actor.x + (radial ? 0 : Math.cos(angle) * length / 2), 0.045, actor.z + (radial ? 0 : Math.sin(angle) * length / 2));
       view.danger.scale.set(length, 0.015, width);
       view.danger.rotation.y = -angle;
       if ((attack.move?.behavior === 'mortar' || attack.move?.behavior === 'leap') && actor.aim) {
-        const radius = attack.move?.behavior === 'mortar' ? 2.1 : 1.5;
+        const radius = attack.move?.behavior === 'mortar' ? 2.1 : actor.kind === 'gargoyle' ? 3 : 1.5;
         view.danger.position.set(actor.aim.x, 0.045, actor.aim.z);
         view.danger.scale.set(radius * 2, 0.015, radius * 2);
         view.danger.rotation.y = 0;
@@ -986,7 +1007,7 @@ export class GameScene {
       const label = this.actors.get(actor.id)?.label;
       if (!label?.visible) continue;
       anchors.push({ id: actor.id, x: label.x, y: label.y, width: label.width, height: label.height,
-        priority: (actor.telegraph > 0 ? 100 : 0) + (actor.state === 'hurt' ? 60 : 0) + (actor.kind === 'boss' || actor.kind === 'warden' ? 80 : 0) - Math.abs(actor.x - p.x) });
+        priority: (actor.telegraph > 0 ? 100 : 0) + (actor.state === 'hurt' ? 60 : 0) + (isBossKind(actor.kind) ? 80 : 0) - Math.abs(actor.x - p.x) });
     }
     const detailed = this.debugDetails && world.mode === 'training';
     const candidates = anchors.sort((a, b) => b.priority - a.priority);
@@ -1024,7 +1045,7 @@ export class GameScene {
     const occludedByActor = world.enemies.some(enemy => {
       // A large body can cover P1 on the same lane; compare its front surface, not only its center.
       if (!enemy.alive || enemy.z + 0.5 * enemy.scale < p.z + 0.12) return false;
-      const bounds = this.screenBounds(enemy.x, enemy.y, enemy.z, (enemy.kind === 'boss' || enemy.kind === 'warden' ? 1.5 : 0.85) * enemy.scale, 2.2 * enemy.scale);
+      const bounds = this.screenBounds(enemy.x, enemy.y, enemy.z, (enemy.kind === 'boss' || enemy.kind === 'warden' || enemy.kind === 'gargoyle' ? 1.5 : 0.85) * enemy.scale, 2.2 * enemy.scale);
       return bounds !== null && overlaps(body, bounds);
     });
     const occludedByProp = world.props.some(prop => {

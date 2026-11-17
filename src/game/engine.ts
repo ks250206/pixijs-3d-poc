@@ -13,9 +13,12 @@ import { createCandidates, seededRandom } from './loadouts';
 import { createArena, insideProp } from './arena';
 import { ARENA_HALF_WIDTH, SECTOR_SPAN, STAGES, TRAINING_WAVES } from './campaign';
 import { createPattern, insideHazard } from './patterns';
+import { BESTIARY, MIRROR_PHASE_ARMOR, MIRROR_SHIFT_TIME, isBossKind } from './bestiary';
 import { EMPTY_INPUT, type Actor, type ActorKind, type AreaHazard, type ArenaProp, type AttackDirection, type AttackKind, type BufferedAction, type Effect, type GameMode, type InputFrame, type Loadout, type Projectile, type SpawnWarning, type SupplyChoice, type WorldState } from './types';
 
 const GRAVITY = 27;
+/** Longest a roller stays a wheel before it has to unfold again. */
+const ROLL_TIME = 5;
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 const approach = (value: number, target: number, amount: number) => value < target ? Math.min(value + amount, target) : Math.max(value - amount, target);
 
@@ -71,6 +74,16 @@ interface ActorMemory {
   upgradeAirUsed: boolean;
   upgradeNormalHits: number;
   upgradeFlow: number;
+  /** Follow-up steps of a multi-part enemy attack, begun back to back without re-arbitration. */
+  chain: string[];
+  /** Seconds left in (or until the next change of) the actor's current form. */
+  formTimer: number;
+  /** Attacks made since the last change of form. */
+  formAttacks: number;
+  /** A jester's erratic offset from its target, and when it picks the next one. */
+  wanderX: number;
+  wanderZ: number;
+  wanderTimer: number;
 }
 
 interface ProjectileMemory {
@@ -211,7 +224,7 @@ export class GameEngine {
     r.phase = 'combat';
     this.modifiers = eliteModifiers(r, node);
     this.encounter = encounterRoster(r, node);
-    if (this.modifiers.includes('armor') && !this.encounter.some(k=>['sentinel','warden','boss','rider'].includes(k))) this.encounter.push('sentinel');
+    if (this.modifiers.includes('armor') && !this.encounter.some(k=>['sentinel','warden','boss','rider','mirror','gargoyle'].includes(k))) this.encounter.push('sentinel');
     if (this.modifiers.includes('commander')) this.encounter = ['captain', 'sentinel', 'rider', ...this.encounter.slice(0, 3)];
     if (this.modifiers.includes('swarm')) this.encounter.push(...Array.from({length: Math.ceil(this.encounter.length / 2)}, () => 'minion' as const));
     this.random = seededRandom(nodeSeed(r.seed, `combat:${node.id}`));
@@ -453,14 +466,21 @@ export class GameEngine {
       mem.dashTimer = Math.max(0, mem.dashTimer - dt);
       mem.comboTimer = Math.max(0, mem.comboTimer - dt);
       mem.upgradeFlow = Math.max(0, mem.upgradeFlow - dt);
+      mem.formTimer = Math.max(0, mem.formTimer - dt);
       if (actor.kind === 'player' && this.isGrounded(actor)) mem.upgradeAirUsed = false;
       if (!actor.alive) continue;
+      // A spent talon catches its breath near the floor before climbing again.
+      if (actor.kind === 'talon' && actor.form === 'spent' && mem.formTimer === 0) actor.form = 'default';
       if (actor.bossPhase === 'transition') {
         mem.phaseTimer = Math.max(0, mem.phaseTimer - dt);
-        if (mem.phaseTimer === 0) { actor.bossPhase = 'overdrive'; actor.state = 'idle'; mem.actionTimer = 0; mem.cooldown = 0.3; mem.pattern = 0; w.message = 'OVERDRIVE // Pincer・Pulse・Overload'; w.messageTime = 3; }
+        if (mem.phaseTimer === 0) this.finishTransition(actor, mem);
       }
       if (mem.actionTimer > 0) mem.actionTimer = Math.max(0, mem.actionTimer - dt);
       if (actor.state !== 'charge' && actor.state !== 'grab' && actor.state !== 'grabbed' && mem.actionTimer <= 0 && actor.state !== 'idle' && actor.state !== 'run' && actor.state !== 'jump' && actor.state !== 'fall') {
+        // A chained enemy attack flows straight into its next step, keeping its director reservation.
+        const chained = actor.state === 'attack' && actor.kind !== 'player' && mem.chain.length > 0;
+        if (chained && w.player.alive && this.continueChain(actor, mem, mem.strike?.connected ?? false)) continue;
+        mem.chain = [];
         actor.state = actor.y > 0.02 ? 'fall' : 'idle';
         actor.stateTime = 0;
         actor.attack = null;
@@ -510,12 +530,13 @@ export class GameEngine {
   }
 
   private makeActor(kind: ActorKind, x: number, z: number): Actor {
+    const spec = BESTIARY[kind];
     const actor: Actor = {
-      id: `${kind}-${this.serial++}`, kind, x, y: kind === 'drone' ? 1.5 : 0, z,
+      id: `${kind}-${this.serial++}`, kind, x, y: kind === 'drone' ? 1.5 : kind === 'talon' ? spec!.hover! : 0, z,
       vx: 0, vy: 0, vz: 0, facing: kind === 'player' ? 1 : -1,
-      damage: 0, armor: kind === 'boss' ? 405 : kind === 'warden' ? 210 : 0, mount: kind === 'rider' ? 30 : 0, leaderId: null, guard: kind === 'sentinel' ? 40 : 0, alive: true,
-      state: 'idle', stateTime: 0, invulnerable: 0, scale: kind === 'boss' ? 2.65 : kind === 'warden' ? 1.85 : kind === 'bruiser' ? 1.25 : kind === 'minion' ? 0.58 : kind === 'drone' ? 0.8 : 1,
-      bossPhase: kind === 'boss' ? 'armored' : null, phaseChanges: 0, tactic: '',
+      damage: 0, armor: spec?.armor ?? (kind === 'boss' ? 405 : kind === 'warden' ? 210 : 0), mount: kind === 'rider' ? 30 : 0, leaderId: null, guard: kind === 'sentinel' ? 40 : 0, alive: true,
+      state: 'idle', stateTime: 0, invulnerable: 0, scale: spec ? spec.scale : kind === 'boss' ? 2.65 : kind === 'warden' ? 1.85 : kind === 'bruiser' ? 1.25 : kind === 'minion' ? 0.58 : kind === 'drone' ? 0.8 : 1,
+      bossPhase: kind === 'boss' || kind === 'mirror' ? 'armored' : null, phaseChanges: 0, form: kind === 'roller' ? 'rolling' : 'default', tactic: '',
       attack: null, telegraph: 0, aim: null,
     };
     if (kind !== 'player' && (this.modifiers.includes('armor') || this.modifiers.includes('commander'))) { actor.armor *= 1.4; actor.guard *= 1.4; actor.mount *= 1.4; }
@@ -531,6 +552,7 @@ export class GameEngine {
       comboStage: 0, comboTimer: 0, dashTimer: 0,
       cooldown: 0.5 + this.random() * 1.0, pattern: 0, grabTarget: null, grabbedBy: null,
       grabTimer: 0, respawnTimer: 0, spawnTime: 0, bossBroken: false, hazardCooldown: 0,
+      chain: [], formTimer: 0, formAttacks: 0, wanderX: 0, wanderZ: 0, wanderTimer: 0,
     });
   }
 
@@ -740,7 +762,7 @@ export class GameEngine {
   private beginAttack(actor: Actor, kind: AttackKind, direction: AttackDirection, name: string, duration: number, range: number, charge: number, options: Partial<Strike>): void {
     this.beginMove(actor, utilityMove(options.id ?? 'enemy.strike', name, kind, direction, duration, range, {
       behavior: options.behavior ?? (options.projectile ? 'projectile' : 'melee'),
-      pose: actor.kind === 'player' ? this.world.loadout.weapon : ['boss', 'warden', 'bruiser'].includes(actor.kind) ? 'pile' : 'arc',
+      pose: actor.kind === 'player' ? this.world.loadout.weapon : ['boss', 'warden', 'bruiser', 'mauler', 'gargoyle'].includes(actor.kind) ? 'pile' : 'arc',
       startup: (options.activeStart ?? 0.2) * 60, end: (options.activeEnd ?? 0.35) * 60,
       radial: options.radial, depth: options.depth, height: options.height, charge,
       damage: options.damage ?? 8, force: options.force ?? 6, growth: options.growth ?? 0.065, angle: options.angle ?? 0.55,
@@ -761,18 +783,33 @@ export class GameEngine {
     }
     if (strike.move.behavior === 'rush') {
       if (attack.elapsed >= strike.activeStart && attack.elapsed <= strike.activeEnd) {
-        actor.vx = actor.facing * (actor.kind === 'rider' ? 14 : actor.kind === 'charger' ? 13 : 9);
+        actor.vx = actor.facing * (BESTIARY[actor.kind]?.rush ?? (actor.kind === 'rider' ? 14 : actor.kind === 'charger' ? 13 : 9));
         actor.vz = 0;
         if (actor.kind === 'drone' && actor.y > 0.1) actor.vy = -4;
+        // A pounce or a stoop bends toward its prey instead of flying a fixed line.
+        const prey = this.world.player;
+        if (actor.kind === 'hound') actor.vz = clamp((prey.z - actor.z) * 6, -2.5, 2.5);
+        if (actor.kind === 'talon') {
+          actor.vz = clamp((prey.z - actor.z) * 6, -4, 4);
+          actor.vy = clamp((prey.y + 0.35 - actor.y) * 9, -9, 3);
+        }
         this.memory(actor).forced = 0.08;
-      } else { actor.vx = 0; actor.vz = 0; }
+      } else {
+        actor.vx = 0; actor.vz = 0;
+        if (actor.kind === 'talon') actor.vy = 0;
+        // A hound squares up to its prey's lane while it crouches.
+        if (actor.kind === 'hound' && attack.elapsed < strike.activeStart) actor.vz = clamp((this.world.player.z - actor.z) * 5, -2.5, 2.5);
+      }
     }
     if (!strike.motionStarted && attack.elapsed >= strike.activeStart && strike.move.behavior === 'leap' && actor.aim) {
       strike.motionStarted = true;
-      actor.vy = 10;
-      actor.vx = clamp((actor.aim.x - actor.x) / .75, -7, 7);
-      actor.vz = clamp((actor.aim.z - actor.z) / .75, -4, 4);
-      this.memory(actor).forced = .85;
+      // A hop from the floor, or a stoop from the air: either way the flight time sets the speed.
+      actor.vy = actor.y > 1 ? 2 : 10;
+      const flight = (actor.vy + Math.sqrt(actor.vy * actor.vy + 2 * GRAVITY * Math.max(0, actor.y))) / GRAVITY;
+      const limit = actor.kind === 'gargoyle' ? 13 : 7;
+      actor.vx = clamp((actor.aim.x - actor.x) / flight, -limit, limit);
+      actor.vz = clamp((actor.aim.z - actor.z) / flight, -4, 4);
+      this.memory(actor).forced = flight + .1;
     }
   }
 
@@ -796,8 +833,8 @@ export class GameEngine {
       const color = actor.kind === 'player' ? this.world.loadout.color : 0xff6b67;
       this.effect(attack.direction === 'down' || strike.radial ? 'shockwave' : 'trail', actor.x + actor.facing * attack.range * 0.4, actor.y + 0.9, actor.z, 0.25, attack.range, color);
       if (actor.kind === 'player') this.emitUpgradeAttack(actor, strike);
-      if (actor.kind === 'boss' && strike.move.id === 'boss.slam') {
-        this.effect('shockwave', actor.x, 0.08, actor.z, 0.7, 5, 0xff624e);
+      if (['boss.slam', 'mauler.pound', 'mauler.hammer', 'gargoyle.tail'].includes(strike.move.id)) {
+        this.effect('shockwave', actor.x, 0.08, actor.z, 0.7, strike.move.id === 'boss.slam' ? 5 : attack.range * 1.6, 0xff624e);
         this.world.shake = Math.max(this.world.shake, 0.35);
       }
     }
@@ -972,12 +1009,14 @@ export class GameEngine {
   }
 
   private enemyCombatProfile(enemy: Actor) {
+    const spec = BESTIARY[enemy.kind];
+    const aloft = enemy.kind === 'gargoyle' && enemy.form === 'airborne';
     const boss = enemy.kind === 'boss' || enemy.kind === 'warden';
-    const ranged = ['gunner', 'artillery', 'captain', 'sniper', 'sapper'].includes(enemy.kind);
+    const ranged = ['gunner', 'artillery', 'captain', 'sniper', 'sapper', 'gunhound', 'roller'].includes(enemy.kind) || aloft;
     const mounted = enemy.kind === 'rider' && enemy.mount > 0;
-    const rush = enemy.kind === 'charger' || enemy.kind === 'drone' || mounted;
-    const reach = boss ? 3.4 : enemy.kind === 'sniper' ? 12 : enemy.kind === 'sapper' ? 5 : enemy.kind === 'artillery' ? 10 : enemy.kind === 'captain' ? 4.5 : ranged ? 6.8 : rush ? 5.5 : enemy.kind === 'leaper' ? 4.8 : 2;
-    const speed = mounted ? 4.4 : enemy.kind === 'minion' ? 4.1 : enemy.kind === 'artillery' ? 1.6 : enemy.kind === 'bruiser' ? 2 : boss ? 1.65 : enemy.kind === 'sentinel' ? 2.2 : enemy.kind === 'scout' ? 3.8 : 3.1;
+    const rush = enemy.kind === 'charger' || enemy.kind === 'drone' || mounted || spec?.rush !== undefined;
+    const reach = aloft ? 8 : enemy.form === 'deployed' ? 9.2 : spec ? spec.reach : boss ? 3.4 : enemy.kind === 'sniper' ? 12 : enemy.kind === 'sapper' ? 5 : enemy.kind === 'artillery' ? 10 : enemy.kind === 'captain' ? 4.5 : ranged ? 6.8 : rush ? 5.5 : enemy.kind === 'leaper' ? 4.8 : 2;
+    const speed = spec ? spec.speed * (enemy.kind === 'mirror' ? this.world.loadout.speed : 1) : mounted ? 4.4 : enemy.kind === 'minion' ? 4.1 : enemy.kind === 'artillery' ? 1.6 : enemy.kind === 'bruiser' ? 2 : boss ? 1.65 : enemy.kind === 'sentinel' ? 2.2 : enemy.kind === 'scout' ? 3.8 : 3.1;
     return { boss, ranged, mounted, rush, reach, speed: speed * (this.modifiers.includes('haste') || this.modifiers.includes('berserk') && enemy.damage >= 60 ? 1.25 : 1) };
   }
 
@@ -989,8 +1028,13 @@ export class GameEngine {
       || !this.onPlatform(enemy) || enemy.y < 0) return false;
     const { boss, ranged, reach } = this.enemyCombatProfile(enemy);
     const dx = p.x - enemy.x, dz = p.z - enemy.z;
+    // A roller only fires once unfolded, and a spent talon has to recover first.
+    if (enemy.kind === 'roller' && enemy.form !== 'deployed' || enemy.kind === 'talon' && enemy.form === 'spent') return false;
+    if (enemy.kind === 'gargoyle' && enemy.form === 'airborne') return true;
+    // The mirror closes with dashes and specials once it leaves its duelling mode.
+    if (enemy.kind === 'mirror') return Math.abs(dx) <= (enemy.phaseChanges > 0 ? 7.5 : 3.3) && Math.abs(dz) < 1.3 && Math.abs(p.y - enemy.y) < 2.6;
     return boss || (Math.abs(dx) <= reach + 0.3
-      && Math.abs(dz) < (['artillery', 'sniper', 'sapper'].includes(enemy.kind) ? 7 : ranged ? 1.8 : 1.15)
+      && Math.abs(dz) < (['artillery', 'sniper', 'sapper'].includes(enemy.kind) ? 7 : BESTIARY[enemy.kind]?.lane ?? (ranged ? 1.8 : 1.15))
       && (ranged || Math.abs(p.y - enemy.y) < 2.6));
   }
 
@@ -1011,7 +1055,7 @@ export class GameEngine {
       enemy.state = 'recover'; enemy.stateTime = 0;
       enemy.attack = null; enemy.telegraph = 0; enemy.aim = null;
       enemy.vx = clamp((clamp(enemy.x, w.arenaMin + 2, w.arenaMax - 2) - enemy.x) * 4, -8, 8);
-      enemy.vz = clamp(-enemy.z * 3, -6, 6); enemy.vy = enemy.kind === 'drone' ? 17 : 15.5;
+      enemy.vz = clamp(-enemy.z * 3, -6, 6); enemy.vy = this.hoverHeight(enemy) !== null ? 17 : 15.5;
       this.effect('trail', enemy.x, enemy.y, enemy.z, 0.6, 2, 0x70dfff);
       this.effect('text', enemy.x, enemy.y + 1.8, enemy.z, 0.8, 1, 0x70dfff, 'BOOST RECOVERY');
       return;
@@ -1020,8 +1064,10 @@ export class GameEngine {
     enemy.telegraph = 0;
     enemy.aim = null;
     const dx = p.x - enemy.x;
-    if (enemy.kind === 'drone' && m.forced <= 0 && this.onPlatform(enemy)) {
-      enemy.y += (1.5 + Math.sin(w.time * 2.7 + m.spawnTime) * 0.18 - enemy.y) * Math.min(1, dt * 8);
+    const hover = this.hoverHeight(enemy);
+    if (hover !== null && m.forced <= 0 && this.onPlatform(enemy)) {
+      const climb = enemy.kind === 'drone' ? 8 : enemy.kind === 'talon' ? 4 : 2.2;
+      enemy.y += (hover + Math.sin(w.time * 2.7 + m.spawnTime) * 0.18 - enemy.y) * Math.min(1, dt * climb);
       enemy.vy = 0;
     }
     if (w.mode === 'training') {
@@ -1036,12 +1082,42 @@ export class GameEngine {
     enemy.tactic = plan.action;
     const slot = w.enemies.indexOf(enemy);
     // Scouts approach different flanks; support units maintain firing distance.
-    const flank = enemy.kind === 'scout' && Math.abs(dx) > 3 ? (slot % 2 ? 1 : -1) * 1.4 : 0;
+    const flank = (enemy.kind === 'scout' && Math.abs(dx) > 3 || enemy.kind === 'hound' && Math.abs(dx) > 4.6) ? (slot % 2 ? 1 : -1) * 1.4 : 0;
     let targetVX = Math.abs(dx) > reach ? Math.sign(dx) * speed : 0;
     let targetVZ = Math.abs(plan.lane - enemy.z + flank) > 0.45 ? Math.sign(plan.lane - enemy.z + flank) * speed * 0.75 : 0;
     if (ranged && Math.abs(dx) < 3.6) targetVX = -Math.sign(dx) * 2.8;
     // Brief disengagement makes a scout's strike/recovery rhythm readable.
     if (enemy.kind === 'scout' && m.pattern > 0 && m.cooldown > 1.3 && Math.abs(dx) < 2.8) targetVX = -Math.sign(dx) * 2;
+    // Hounds bite and break away; a spent talon drifts; an airborne gargoyle holds its distance.
+    if (enemy.kind === 'hound' && m.pattern > 0 && m.cooldown > 0.7 && Math.abs(dx) < 3) targetVX = -Math.sign(dx || 1) * 3.2;
+    if (enemy.kind === 'talon' && enemy.form === 'spent') { targetVX = 0; targetVZ = 0; }
+    if (enemy.kind === 'gargoyle' && enemy.form === 'airborne') targetVX = Math.abs(dx) > 8.5 ? Math.sign(dx) * speed * 1.5 : Math.abs(dx) < 5.5 ? -Math.sign(dx || 1) * speed * 1.5 : 0;
+    // Between exchanges the mirror gives ground like a fighter resetting to neutral.
+    if (enemy.kind === 'mirror' && enemy.phaseChanges > 0 && m.cooldown > 0.55 && Math.abs(dx) < 3) targetVX = -Math.sign(dx || 1) * speed * 0.6;
+    if (enemy.kind === 'roller') {
+      if (enemy.form === 'deployed') { targetVX = 0; targetVZ = 0; }
+      else {
+        const spot = this.rollerSpot(enemy);
+        targetVX = clamp((spot - enemy.x) * 3, -speed, speed);
+        targetVZ = clamp((p.z - enemy.z) * 3, -speed * 0.75, speed * 0.75);
+      }
+    }
+    if (enemy.kind === 'jester') {
+      m.wanderTimer -= dt;
+      if (m.wanderTimer <= 0) {
+        // No pattern to read: a new point around the target every fraction of a second.
+        m.wanderTimer = 0.25 + this.random() * 0.5;
+        const angle = this.random() * Math.PI * 2, radius = 1.2 + this.random() * 2.6, whim = this.random();
+        m.wanderX = Math.cos(angle) * radius; m.wanderZ = Math.sin(angle) * radius * 0.8;
+        if (whim < 0.2 && this.isGrounded(enemy)) enemy.vy = 7.5;
+        else if (whim < 0.45) {
+          enemy.vz = (this.random() < 0.5 ? -1 : 1) * 9;
+          this.effect('trail', enemy.x, enemy.y + 0.8, enemy.z, 0.3, 1.2, 0xe86bff);
+        }
+      }
+      targetVX = clamp((p.x + m.wanderX - enemy.x) * 3, -speed, speed);
+      targetVZ = clamp((p.z + m.wanderZ - enemy.z) * 3, -speed, speed);
+    }
     if (enemy.kind === 'minion' && enemy.leaderId && Math.abs(dx) > 5) {
       const leader = w.enemies.find((ally) => ally.id === enemy.leaderId && ally.alive);
       if (leader) {
@@ -1072,12 +1148,14 @@ export class GameEngine {
     enemy.vx = approach(enemy.vx, targetVX, dt * 14);
     enemy.vz = approach(enemy.vz, clamp(targetVZ, -speed, speed), dt * 12);
     enemy.state = Math.hypot(enemy.vx, enemy.vz) > 0.3 ? 'run' : 'idle';
+    if (enemy.kind === 'roller' && this.shiftRoller(enemy, m, dx, p.z - enemy.z)) return;
     // The shared director reserves the whole telegraph, action, projectile and recovery window.
     if (!this.enemyCanAttack(enemy) || !this.director.reserve(enemy, w, 7)) return;
     enemy.tactic = 'COMMITTED';
     enemy.vx = 0; enemy.vz = 0;
     m.pattern++;
     m.cooldown = boss ? (enemy.armor > 0 ? 1.85 : 1.45) : enemy.kind === 'charger' ? 2.4 : 1.25 + this.random() * 0.65;
+    if (this.specialistAttack(enemy, m, dx)) return;
     if (enemy.kind === 'boss' && enemy.bossPhase === 'overdrive') {
       const pattern = (m.pattern - 1) % 3;
       if (pattern === 1) this.beginAttack(enemy, 'enemy', 'forward', 'OVERDRIVE / PULSE FAN', 1.15, 11, 0, { id: 'overdrive.pulse', behavior: 'projectile', damage: 18, force: 10, activeStart: .58, activeEnd: .75 });
@@ -1118,14 +1196,250 @@ export class GameEngine {
     }
   }
 
+  /** Altitude a flying enemy holds, or null while it walks. */
+  private hoverHeight(actor: Actor): number | null {
+    if (actor.kind === 'drone') return 1.5;
+    const hover = BESTIARY[actor.kind]?.hover;
+    if (hover === undefined) return null;
+    if (actor.kind === 'talon') return actor.form === 'spent' ? 0.55 : hover;
+    return actor.form === 'airborne' ? hover : null;
+  }
+
+  /** A boss finishes changing mode: the Architect boots its overdrive, the mirror its next stance. */
+  private finishTransition(actor: Actor, mem: ActorMemory): void {
+    const w = this.world;
+    actor.state = 'idle'; mem.actionTimer = 0; mem.cooldown = 0.3; mem.pattern = 0;
+    if (actor.kind === 'mirror' && actor.phaseChanges < 2) {
+      actor.bossPhase = 'armored'; actor.armor = MIRROR_PHASE_ARMOR;
+      w.message = 'MIRROR // MODE 2 ASSAULT — 突進と特殊技。まだ吹っ飛ばない';
+    } else if (actor.kind === 'mirror') {
+      actor.bossPhase = 'overdrive'; mem.bossBroken = true;
+      w.message = 'MIRROR // MODE 3 OVERCLOCK — 装甲消失。吹っ飛ばせ';
+    } else {
+      actor.bossPhase = 'overdrive';
+      w.message = 'OVERDRIVE // Pincer・Pulse・Overload';
+    }
+    w.messageTime = 3;
+  }
+
+  /**
+   * The mirror's armor ran out before its last mode: it changes stance. Entering mode 2 its damage
+   * is wiped; what it takes in mode 2 is carried into mode 3, where it can finally be launched.
+   */
+  private shiftMirror(target: Actor, m: ActorMemory): void {
+    const w = this.world;
+    target.bossPhase = 'transition'; target.phaseChanges++;
+    m.phaseTimer = MIRROR_SHIFT_TIME; target.invulnerable = MIRROR_SHIFT_TIME;
+    if (target.phaseChanges === 1) target.damage = 0;
+    w.hazards = w.hazards.filter((hazard) => hazard.ownerId !== target.id);
+    w.projectiles = w.projectiles.filter((shot) => { if (shot.ownerId !== target.id) return true; this.shots.delete(shot.id); return false; });
+    this.director.reset();
+    w.message = `MIRROR // MODE SHIFT ${target.phaseChanges + 1}/3`; w.messageTime = 2.4;
+    this.effect('shockwave', target.x, 1.1, target.z, 0.9, 4.5, 0xff5a7c);
+    w.events.push({ type: 'boss' });
+    w.shake = Math.max(w.shake, 0.6);
+  }
+
+  /** Where a rolling droid wants to unfold: a firing distance from the player, on its own side if it fits. */
+  private rollerSpot(enemy: Actor): number {
+    const w = this.world, p = w.player;
+    const side = enemy.x >= p.x ? 1 : -1;
+    const near = p.x + side * 5.5, far = p.x - side * 5.5;
+    const inside = (x: number) => x > w.arenaMin + 1.5 && x < w.arenaMax - 1.5;
+    return inside(near) || !inside(far) ? clamp(near, w.arenaMin + 1.5, w.arenaMax - 1.5) : far;
+  }
+
+  /** Folds or unfolds a roller when its position calls for it. True when it began changing form. */
+  private shiftRoller(enemy: Actor, m: ActorMemory, dx: number, dz: number): boolean {
+    if (enemy.state === 'attack' || m.actionTimer > 0 || m.forced > 0 || enemy.y > 0.05) return false;
+    const deployed = enemy.form === 'deployed';
+    // Unfolded it holds its ground, even with the player on top of it: that is the opening.
+    const leave = deployed && (m.formTimer <= 0 || Math.abs(dx) > 10.5 || Math.abs(dz) > 2.6);
+    // It unfolds at its firing spot once it has rolled a while — and wherever it is when its roll runs out,
+    // so it can be chased down instead of kiting forever.
+    const settle = !deployed && (m.formTimer <= 0 || m.formTimer <= ROLL_TIME - 2.5 && Math.abs(this.rollerSpot(enemy) - enemy.x) < 0.8 && Math.abs(dz) < 1.2 && Math.abs(dx) > 3);
+    if (!leave && !settle) return false;
+    enemy.vx = 0; enemy.vz = 0;
+    this.beginAttack(enemy, 'enemy', 'neutral', deployed ? 'ROLLER / FOLD' : 'ROLLER / DEPLOY', deployed ? 0.45 : 0.6, 0, 0, { id: deployed ? 'roller.fold' : 'roller.deploy', behavior: 'none', activeStart: 0, activeEnd: 0 });
+    m.chain = [deployed ? 'rolling' : 'deployed'];
+    return true;
+  }
+
+  /**
+   * Begins the next step of an enemy's multi-part attack the instant the previous one ends.
+   * False when the chain ended (or was abandoned) without a new move.
+   */
+  private continueChain(enemy: Actor, m: ActorMemory, connected: boolean): boolean {
+    const w = this.world, p = w.player, step = m.chain.shift()!;
+    const dx = p.x - enemy.x, dz = p.z - enemy.z;
+    const face = () => { enemy.facing = dx >= 0 ? 1 : -1; };
+    if (step === 'deployed' || step === 'rolling') {
+      enemy.form = step; m.formTimer = step === 'deployed' ? 4.5 : ROLL_TIME; m.cooldown = 0.5;
+      return false;
+    }
+    if (step === 'spent') {
+      enemy.form = 'spent'; m.formTimer = 2.2; m.cooldown = Math.max(m.cooldown, 3.4); enemy.vx = enemy.vy = enemy.vz = 0;
+      return false;
+    }
+    if (step === 'burst') {
+      face();
+      this.beginAttack(enemy, 'enemy', 'forward', 'BACK GUN / BURST', m.chain.length ? 0.22 : 0.5, 7, 0, { id: 'gunhound.burst', projectile: true, activeStart: 0.08, activeEnd: 0.14, damage: 3, force: 2.5, growth: 0.02 });
+      return true;
+    }
+    if (step === 'twin') {
+      face();
+      this.beginAttack(enemy, 'enemy', 'forward', 'ROLLER / TWIN BLASTER', 0.42, 7, 0, { id: 'roller.twin', projectile: true, activeStart: 0.1, activeEnd: 0.16, damage: 4, force: 3.5, growth: 0.025 });
+      return true;
+    }
+    if (step === 'peck' || step === 'rend') {
+      // The flurry only lasts while it keeps connecting: dodge one hit and the bird is left spent.
+      if (!connected || Math.hypot(dx, dz) > 3.4 || Math.abs(p.y - enemy.y) > 2.4) { m.chain = ['spent']; return this.continueChain(enemy, m, false); }
+      face();
+      enemy.vx = clamp((p.x - enemy.facing * 1.1 - enemy.x) * 4, -9, 9);
+      enemy.vz = clamp(dz * 4, -5, 5);
+      enemy.vy = clamp((p.y + 0.3 - enemy.y) * 4, -6, 6);
+      if (step === 'peck') this.beginAttack(enemy, 'enemy', 'forward', 'TALON / FLURRY', 0.24, 1.7, 0, { id: 'talon.peck', damage: 5, force: 1.6, growth: 0.008, angle: 0.25, activeStart: 0.07, activeEnd: 0.16, depth: 1.2 });
+      else this.beginAttack(enemy, 'enemy', 'forward', 'TALON / RENDING KICK', 0.55, 1.9, 0, { id: 'talon.rend', damage: 10, force: 9, growth: 0.06, angle: 0.6, activeStart: 0.14, activeEnd: 0.26, depth: 1.2 });
+      return true;
+    }
+    if (step === 'backstab') {
+      // The feint was the tell: it reappears behind its target and strikes at once.
+      this.effect('trail', enemy.x, enemy.y + 0.8, enemy.z, 0.4, 1.6, 0xe86bff);
+      enemy.x = clamp(p.x - p.facing * 1.5, w.arenaMin + 0.6, w.arenaMax - 0.6);
+      enemy.z = clamp(p.z, -3.4, 3.4); enemy.vx = 0; enemy.vz = 0;
+      enemy.facing = p.x >= enemy.x ? 1 : -1;
+      this.effect('spawn', enemy.x, 0, enemy.z, 0.4, 1, 0xe86bff);
+      this.beginAttack(enemy, 'enemy', 'forward', 'JESTER / BACKSTAB', 0.75, 2.2, 0, { id: 'jester.backstab', damage: 10, force: 7, activeStart: 0.27, activeEnd: 0.42 });
+      return true;
+    }
+    if (step === 'jab1' || step === 'jab2' || step === 'uptilt') {
+      if (Math.abs(dx) > 3.2 || Math.abs(dz) > 1.5) return false;
+      face();
+      const move = step === 'uptilt' ? playerMove(w.loadout, 'tilt', 'up', 0, 0) : playerMove(w.loadout, 'jab', 'neutral', step === 'jab1' ? 1 : 2, 0);
+      this.beginMove(enemy, this.mirrorMove(move, step === 'uptilt' ? 6 : 3));
+      return true;
+    }
+    return false;
+  }
+
+  /** A player move as the mirror throws it: telegraphed, weaker, slower to finish a stock and never cancelled. */
+  private mirrorMove(move: MoveDefinition, windup: number): MoveDefinition {
+    return { ...move, id: `mirror.${move.id}`, name: `MIRROR / ${move.name}`, frames: { ...move.frames, startup: move.frames.startup + windup }, damage: move.damage * 0.7, force: move.force * 0.85, growth: move.growth * 0.6, cancels: [] };
+  }
+
+  /**
+   * The mirror fights with the player's own chassis. Mode 1 duels with normals, mode 2 adds dashes
+   * and specials, mode 3 adds charged smashes — and only then can it be launched.
+   */
+  private mirrorAttack(enemy: Actor, m: ActorMemory, dx: number): void {
+    const w = this.world, loadout = w.loadout, phase = enemy.phaseChanges;
+    const far = Math.abs(dx) > 3.3, turn = (m.pattern - 1) % 4;
+    m.cooldown = phase === 0 ? 1.8 : phase === 1 ? 1.45 : 1.15;
+    const normal = (kind: AttackKind, direction: AttackDirection, windup: number, charge = 0) => this.beginMove(enemy, this.mirrorMove(playerMove(loadout, kind, direction, 0, charge), windup));
+    const dash = () => { enemy.vx = enemy.facing * 9; normal('dash', 'forward', 14); };
+    const special = (direction: AttackDirection) => {
+      const move = specialMove(loadout, direction);
+      // A phase dash is only thrown where it cannot carry the mirror off the stage.
+      const landing = enemy.x + enemy.facing * 4.8;
+      if (move.behavior === 'phase' && (landing < w.arenaMin + 1 || landing > w.arenaMax - 1)) return false;
+      if (move.behavior === 'phase') {
+        enemy.vx = enemy.facing * (move.id.includes('cross') || move.id.includes('focused') ? 12 : 8); m.forced = 0.28;
+        this.effect('trail', enemy.x, enemy.y + 0.9, enemy.z, 0.55, 3, 0xff5a7c);
+      }
+      this.beginMove(enemy, this.mirrorMove(move, 16));
+      return true;
+    };
+    const string = () => { normal('jab', 'neutral', 18); m.chain = ['jab1', 'jab2']; };
+    if (far) {
+      // Closing the distance: a ranged or travelling special when one fits, otherwise a dash strike.
+      if (turn % 2 === 0 && special(loadout.special === 'vortex' ? 'forward' : 'neutral')) return;
+      dash();
+    } else if (phase === 0) {
+      if (turn === 1) normal('tilt', 'forward', 16);
+      else if (turn === 3) { normal('tilt', 'down', 16); m.chain = ['uptilt']; }
+      else string();
+    } else if (phase === 1) {
+      if (turn === 0 && special('forward')) return;
+      if (turn === 2) normal('tilt', 'forward', 14);
+      else string();
+    } else {
+      if (turn === 0) normal('smash', 'forward', 26, 0.2);
+      else if (turn === 2) { normal('smash', 'down', 24, 0.2); m.chain = ['uptilt']; }
+      else if (turn === 3 && special('forward')) return;
+      else string();
+    }
+  }
+
+  /** One of the pair rules the ground with a halberd and tail; the other breathes fire from the air, then dives to swap. */
+  private gargoyleAttack(enemy: Actor, m: ActorMemory): void {
+    const w = this.world, enraged = enemy.bossPhase === 'overdrive';
+    const twin = w.enemies.find((other) => other !== enemy && other.alive && other.kind === 'gargoyle');
+    m.cooldown = enraged ? 1.7 : 2.6;
+    // Alone, it takes to the air by itself after two ground attacks.
+    if (enemy.form !== 'airborne' && !twin && m.formAttacks >= 2) { enemy.form = 'airborne'; m.formAttacks = 0; }
+    if (enemy.form === 'airborne') {
+      if (m.formAttacks < 2) { m.formAttacks++; this.castArea(enemy, 'breath'); return; }
+      enemy.form = 'default'; m.formAttacks = 0;
+      if (twin) { twin.form = 'airborne'; this.memory(twin).formAttacks = 0; }
+      this.beginAttack(enemy, 'enemy', 'down', 'GARGOYLE / DIVE BOMB', 2.3, 2.7, 0, { id: 'gargoyle.dive', behavior: 'leap', damage: 16, force: 11, growth: 0.075, radial: true, depth: 2.7, height: 1.6, activeStart: 0.8, activeEnd: 1.5, angle: 0.85 });
+      return;
+    }
+    m.formAttacks++;
+    if (m.pattern % 2) this.beginAttack(enemy, 'enemy', 'forward', 'GARGOYLE / HALBERD SWEEP', 1.35, 4.7, 0, { id: 'gargoyle.sweep', damage: 14, force: 10, growth: 0.07, depth: 2.8, height: 3.2, activeStart: 0.72, activeEnd: 0.95 });
+    else this.beginAttack(enemy, 'enemy', 'down', 'GARGOYLE / TAIL SLAM', 1.4, 3.8, 0, { id: 'gargoyle.tail', damage: 15, force: 10, growth: 0.075, radial: true, depth: 3.2, height: 1.5, activeStart: 0.78, activeEnd: 1.0, angle: 0.85 });
+  }
+
+  /** Attack selection for the data-driven enemies. False for kinds handled by the classic table. */
+  private specialistAttack(enemy: Actor, m: ActorMemory, dx: number): boolean {
+    switch (enemy.kind) {
+      case 'mirror': this.mirrorAttack(enemy, m, dx); return true;
+      case 'gargoyle': this.gargoyleAttack(enemy, m); return true;
+      case 'hound':
+        m.cooldown = 1.8 + this.random() * 0.6;
+        this.beginAttack(enemy, 'enemy', 'forward', 'POUNCE BITE', 1, 1.7, 0, { id: 'hound.pounce', behavior: 'rush', damage: 6, force: 5, growth: 0.055, activeStart: 0.4, activeEnd: 0.66, depth: 0.8 });
+        return true;
+      case 'gunhound':
+        m.cooldown = 2.8 + this.random() * 0.6;
+        this.beginAttack(enemy, 'enemy', 'forward', 'BACK GUN / BURST', 0.72, 7, 0, { id: 'gunhound.burst', projectile: true, activeStart: 0.5, activeEnd: 0.56, damage: 3, force: 2.5, growth: 0.02 });
+        m.chain = ['burst', 'burst'];
+        return true;
+      case 'roller':
+        m.cooldown = 2;
+        this.beginAttack(enemy, 'enemy', 'forward', 'ROLLER / TWIN BLASTER', 0.6, 7, 0, { id: 'roller.twin', projectile: true, activeStart: 0.36, activeEnd: 0.42, damage: 4, force: 3.5, growth: 0.025 });
+        m.chain = ['twin'];
+        return true;
+      case 'mauler':
+        m.cooldown = 2.7;
+        if (m.pattern % 2) this.beginAttack(enemy, 'enemy', 'down', 'MAULER / GROUND POUND', 1.8, 3.7, 0, { id: 'mauler.pound', damage: 26, force: 12, growth: 0.085, radial: true, depth: 3.4, height: 1.5, activeStart: 0.95, activeEnd: 1.15, angle: 0.95 });
+        else this.beginAttack(enemy, 'enemy', 'forward', 'MAULER / DOUBLE HAMMER', 1.85, 3.6, 0, { id: 'mauler.hammer', damage: 30, force: 13, growth: 0.09, depth: 2.2, height: 3, activeStart: 1, activeEnd: 1.2 });
+        return true;
+      case 'jester': {
+        m.cooldown = 1.1 + this.random() * 0.9;
+        const whim = this.random();
+        if (whim < 0.4) {
+          this.beginAttack(enemy, 'enemy', 'forward', 'JESTER / FEINT', 0.42, 0, 0, { id: 'jester.feint', behavior: 'none', activeStart: 0.4, activeEnd: 0.4 });
+          m.chain = ['backstab'];
+        } else if (whim < 0.7) this.beginAttack(enemy, 'enemy', 'down', 'JESTER / PINWHEEL', 0.85, 2.3, 0, { id: 'jester.pinwheel', damage: 9, force: 6, radial: true, depth: 2, height: 1.6, activeStart: 0.34, activeEnd: 0.56 });
+        else this.beginAttack(enemy, 'enemy', 'forward', 'JESTER / LUNGE', 0.7, 2.4, 0, { id: 'jester.lunge', damage: 8, force: 5.5, activeStart: 0.3, activeEnd: 0.44 });
+        return true;
+      }
+      case 'talon':
+        m.cooldown = 4.5;
+        this.beginAttack(enemy, 'enemy', 'forward', 'TALON / SCREECH DIVE', 1.15, 1.9, 0, { id: 'talon.dive', behavior: 'rush', damage: 6, force: 2.2, growth: 0.02, angle: 0.35, activeStart: 0.7, activeEnd: 1.02, depth: 0.9 });
+        m.chain = ['peck', 'peck', 'peck', 'rend', 'spent'];
+        return true;
+      default: return false;
+    }
+  }
+
   private castArea(enemy: Actor, pattern: AreaHazard['pattern']): void {
     const w = this.world, m = this.memory(enemy);
-    const enraged = (enemy.kind === 'boss' || enemy.kind === 'warden') && enemy.armor <= 0;
-    const zones = createPattern(pattern, `area-${this.serial++}`, enemy.id, w.arenaMin, w.arenaMax, w.player, Math.floor((m.pattern - 1) / 4), enraged);
+    const enraged = (enemy.kind === 'boss' || enemy.kind === 'warden') && enemy.armor <= 0 || enemy.kind === 'gargoyle' && enemy.bossPhase === 'overdrive';
+    const zones = createPattern(pattern, `area-${this.serial++}`, enemy.id, w.arenaMin, w.arenaMax, w.player, Math.floor((m.pattern - 1) / 4), enraged, enemy);
     w.hazards.push(...zones);
     const duration = Math.max(...zones.map(h => h.delay + h.duration)) + 0.7;
     m.cooldown = duration + (enraged ? 0.45 : 0.8);
-    this.beginAttack(enemy, 'enemy', 'down', `GRID / ${pattern.toUpperCase()}`, duration, 0, 0, { id: `${enemy.bossPhase === 'overdrive' ? 'overdrive' : 'grid'}.${pattern}`, behavior: 'area', activeStart: zones[0]!.delay, activeEnd: duration - 0.7, damage: 0, force: 0 });
+    this.beginAttack(enemy, 'enemy', 'down', pattern === 'breath' ? 'GARGOYLE / FIRE BREATH' : `GRID / ${pattern.toUpperCase()}`, duration, 0, 0, { id: pattern === 'breath' ? 'gargoyle.breath' : `${enemy.bossPhase === 'overdrive' ? 'overdrive' : 'grid'}.${pattern}`, behavior: 'area', activeStart: zones[0]!.delay, activeEnd: duration - 0.7, damage: 0, force: 0 });
   }
 
   private updateHazards(dt: number): void {
@@ -1177,7 +1491,8 @@ export class GameEngine {
     const spread = actor.kind === 'player' && strike.move.id === 'special.pulse.split';
     const count = actor.kind === 'boss' || spread ? 3 : 1;
     for (let index = 0; index < count; index++) {
-      const speed = actor.kind === 'player' ? 17 : actor.kind === 'boss' ? 13 : 9;
+      const rapid = actor.kind === 'gunhound' || actor.kind === 'roller';
+      const speed = actor.kind === 'player' ? 17 : actor.kind === 'boss' ? 13 : rapid ? 12 : 9;
       const angle = count === 3 ? (index - 1) * 0.25 : 0;
       const x = actor.x + actor.facing * actor.scale * 0.9;
       const y = actor.y + (actor.kind === 'boss' ? 1.8 : 0.95);
@@ -1189,7 +1504,7 @@ export class GameEngine {
         vx: Math.cos(angle) * dx / magnitude * speed - Math.sin(angle) * dz / magnitude * speed,
         vy: target ? clamp((target.y + 0.8 - y) / Math.max(1, Math.abs(dx)) * speed, -2, 2) : 0,
         vz: Math.sin(angle) * dx / magnitude * speed + Math.cos(angle) * dz / magnitude * speed,
-        radius: actor.kind === 'boss' ? 0.36 : 0.22, life: 2.4,
+        radius: actor.kind === 'boss' ? 0.36 : rapid ? 0.17 : 0.22, life: 2.4,
         color: actor.kind === 'player' ? w.loadout.color : 0xff6b56,
       };
       w.projectiles.push(projectile);
@@ -1305,8 +1620,11 @@ export class GameEngine {
     let armored = target.armor > 0;
     if (armored) {
       target.armor = Math.max(0, target.armor - damage * (kind === 'smash' ? 1.65 : 1));
-      if (target.armor <= 0 && !m.bossBroken) {
+      if (target.armor <= 0 && target.kind === 'mirror' && !m.bossBroken) this.shiftMirror(target, m);
+      else if (target.armor <= 0 && !m.bossBroken) {
         armored = false; m.bossBroken = true;
+        // A gargoyle whose plating shatters in flight is knocked out of the air.
+        if (target.kind === 'gargoyle') target.form = 'default';
         if (target.kind === 'boss') {
           target.bossPhase = 'transition'; target.phaseChanges++; m.phaseTimer = 1.4;
           w.hazards = []; w.projectiles = []; this.shots.clear(); this.director.reset();
@@ -1318,19 +1636,24 @@ export class GameEngine {
         w.shake = 0.75;
       }
     }
-    const weight = target.kind === 'player' ? w.loadout.weight : target.kind === 'boss' ? 3.6 : target.kind === 'warden' ? 2.6 : target.mount > 0 ? 1.4 : target.kind === 'minion' ? 0.6 : target.kind === 'bruiser' ? 1.45 : target.kind === 'drone' ? 0.78 : 1;
-    const impulse = (target.kind === 'player' ? relicEffect(this.run?.economy.relics ?? [], 'force') : 1) * (force + target.damage * growth * (target.kind === 'player' ? 1 : 0.65)) / weight * (armored ? 0.16 : 1) * launchScale;
+    const spec = BESTIARY[target.kind];
+    // The mirror cannot be launched until its last mode; a mauler mid-swing shrugs off anything but a smash.
+    const anchored = target.kind === 'mirror' && target.bossPhase !== 'overdrive';
+    const braced = target.kind === 'mauler' && target.state === 'attack' && kind !== 'smash' && kind !== 'throw';
+    const poise = armored || anchored || braced;
+    const weight = target.kind === 'player' || target.kind === 'mirror' ? w.loadout.weight : spec ? spec.weight * (target.form === 'deployed' ? 1.8 : 1) : target.kind === 'boss' ? 3.6 : target.kind === 'warden' ? 2.6 : target.mount > 0 ? 1.4 : target.kind === 'minion' ? 0.6 : target.kind === 'bruiser' ? 1.45 : target.kind === 'drone' ? 0.78 : 1;
+    const impulse = (target.kind === 'player' ? relicEffect(this.run?.economy.relics ?? [], 'force') : 1) * (force + target.damage * growth * (target.kind === 'player' ? 1 : 0.65)) / weight * (anchored ? 0 : poise ? 0.16 : 1) * launchScale;
     target.vx = facing * Math.cos(angle) * impulse;
     target.vy = Math.sin(angle) * impulse;
     if (target.y <= 0.05 && target.vy < 0) target.vy = Math.abs(target.vy) * 0.6 + 4;
     target.vz = clamp((target.z - source.z) * impulse * 0.1, -3.5, 3.5);
-    if (!armored || target.state !== 'attack') {
+    if (!poise || target.state !== 'attack') {
       target.state = 'hurt'; target.stateTime = 0; target.attack = null; target.telegraph = 0; target.aim = null;
-      m.strike = null;
-      m.actionTimer = armored ? 0.07 : clamp(0.16 + impulse * 0.022, 0.18, 0.85);
+      m.strike = null; m.chain = [];
+      m.actionTimer = poise ? 0.07 : clamp(0.16 + impulse * 0.022, 0.18, 0.85);
     }
-    m.forced = armored ? 0.1 : clamp(0.35 + impulse * 0.02, 0.4, 1.2);
-    if (target.bossPhase === 'transition') { target.state = 'shield'; target.attack = null; m.strike = null; m.actionTimer = 1.4; m.forced = 0; target.vx = target.vy = target.vz = 0; }
+    m.forced = poise ? 0.1 : clamp(0.35 + impulse * 0.02, 0.4, 1.2);
+    if (target.bossPhase === 'transition') { target.state = 'shield'; target.attack = null; m.strike = null; m.chain = []; m.actionTimer = 1.4; m.forced = 0; target.vx = target.vy = target.vz = 0; }
     else target.invulnerable = 0.065;
     this.effect('hit', target.x, target.y + target.scale * 0.85, target.z, 0.32, 0.6 + impulse * 0.045, source.kind === 'player' ? w.loadout.color : 0xff6c65);
     this.effect('text', target.x, target.y + target.scale * 1.8, target.z, 0.8, 1, 0xffffff, `${Math.round(damage)}`);
@@ -1441,7 +1764,7 @@ export class GameEngine {
     if (actor.state === 'grabbed') return;
     const wasGrounded = this.isGrounded(actor);
     const beforeX = actor.x, beforeY = actor.y, beforeZ = actor.z;
-    const isDroneHovering = actor.kind === 'drone' && m.forced <= 0 && actor.state !== 'hurt' && this.onPlatform(actor);
+    const isDroneHovering = this.hoverHeight(actor) !== null && m.forced <= 0 && actor.state !== 'hurt' && this.onPlatform(actor);
     if (!isDroneHovering && !(actor.state === 'airdodge' && actor.stateTime < DODGE.airHang)) actor.vy -= GRAVITY * dt;
     actor.x += actor.vx * dt; actor.y += actor.vy * dt; actor.z += actor.vz * dt;
     this.constrainDepth(actor);
@@ -1490,7 +1813,7 @@ export class GameEngine {
     const m = this.memory(actor);
     if (m.grabTarget) this.releaseGrab(actor);
     if (m.grabbedBy) this.releaseGrab(w.player);
-    this.effect('ringout', clamp(actor.x, w.arenaMin - 3, w.arenaMax + 3), clamp(actor.y, 1, 8), clamp(actor.z, -5, 5), 1.15, actor.kind === 'boss' ? 7 : 3.8, actor.kind === 'player' ? 0xff646a : w.loadout.color);
+    this.effect('ringout', clamp(actor.x, w.arenaMin - 3, w.arenaMax + 3), clamp(actor.y, 1, 8), clamp(actor.z, -5, 5), 1.15, actor.kind === 'boss' ? 7 : isBossKind(actor.kind) ? 5.5 : 3.8, actor.kind === 'player' ? 0xff646a : w.loadout.color);
     w.events.push({ type: 'ko', intensity: actor.kind === 'boss' ? 1 : 0.7 });
     w.shake = Math.max(w.shake, actor.kind === 'boss' ? 1 : 0.45);
     if (actor.kind === 'player') {
@@ -1515,8 +1838,19 @@ export class GameEngine {
           this.effect('text', minion.x, minion.y + 1.4, minion.z, 1, 1, 0xc9ed6a, 'LINK LOST');
         }
       }
+      if (actor.kind === 'gargoyle') {
+        // The survivor of the pair fights on alone, faster and from both air and ground.
+        const twin = w.enemies.find((enemy) => enemy.alive && enemy.kind === 'gargoyle');
+        if (twin && twin.bossPhase !== 'overdrive') {
+          twin.bossPhase = 'overdrive'; twin.phaseChanges++;
+          this.memory(twin).formAttacks = 0;
+          w.message = 'GARGOYLE ENRAGED // 片割れが空と地上を行き来する'; w.messageTime = 3.2;
+          this.effect('shockwave', twin.x, twin.y + 1.5, twin.z, 0.9, 6, 0xff7a4a);
+          w.events.push({ type: 'boss' });
+        }
+      }
       w.kills++;
-      w.score += actor.kind === 'boss' ? 3000 : 300 + w.combo * 30;
+      w.score += actor.kind === 'boss' ? 3000 : actor.kind === 'mirror' || actor.kind === 'gargoyle' ? 1500 : 300 + w.combo * 30;
       if (w.loadout.trait === 'vampiric') {
         w.player.damage = Math.max(0, w.player.damage - 10);
         this.effect('heal', w.player.x, 1, w.player.z, 0.7, 2, w.loadout.color, '-10%');
@@ -1554,8 +1888,13 @@ export class GameEngine {
         this.effect('spawn', minion.x, 0, minion.z, .8, .8, 0xc9ed6a);
       }
     }
-    if (kind === 'boss' || kind === 'warden') {
-      w.message = kind === 'boss' ? 'WARNING // THE ARCHITECT' : 'MIDBOSS // THE WARDEN'; w.messageTime = 4;
+    if (kind === 'gargoyle' && w.enemies.filter((actor) => actor.alive && actor.kind === 'gargoyle').length % 2 === 0) {
+      // The second of a pair arrives on the wing.
+      enemy.form = 'airborne'; enemy.y = BESTIARY.gargoyle!.hover!;
+    }
+    if (isBossKind(kind)) {
+      w.message = kind === 'boss' ? 'WARNING // THE ARCHITECT' : kind === 'warden' ? 'MIDBOSS // THE WARDEN' : kind === 'mirror' ? 'MIDBOSS // MIRROR UNIT — 自機の複製・3モード' : 'WARNING // TWIN GARGOYLES';
+      w.messageTime = 4;
       w.events.push({ type: 'boss' });
     }
   }
@@ -1592,8 +1931,8 @@ export class GameEngine {
     for (let index = 0; index < kinds.length; index++) {
       const kind = kinds[index]!;
       const batch = Math.floor(index / 4), side = batch % 2 ? -1 : 1;
-      const x = w.sector * SECTOR_SPAN + (kind === 'boss' || kind === 'warden' ? 5 : staged && batch > 0 ? side * (8 + index % 2) : 1.5 + Math.floor(index / 4) * 2.6);
-      const z = kind === 'boss' ? 0 : [-2.7, 2.7, -.9, .9][index % 4]!;
+      const x = w.sector * SECTOR_SPAN + (kind === 'gargoyle' ? 4 + (index % 2) * 5 : isBossKind(kind) ? 5 : staged && batch > 0 ? side * (8 + index % 2) : 1.5 + Math.floor(index / 4) * 2.6);
+      const z = kind === 'boss' || kind === 'mirror' ? 0 : kind === 'gargoyle' ? (index % 2 ? 1.6 : -1.6) : [-2.7, 2.7, -.9, .9][index % 4]!;
       if (staged && batch > 0) this.queueSpawn(kind, x, z, 2 + batch * 1.5, 'wave');
       else this.spawnEnemy(kind, x, z);
     }

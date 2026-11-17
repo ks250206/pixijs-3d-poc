@@ -2,6 +2,7 @@ import { createEvents, type EventState } from "./events";
 import { createEconomy, type Economy } from "./economy";
 import { seededRandom } from "../loadouts";
 import { STAGES } from "../campaign";
+import { isBossKind } from "../bestiary";
 import type { ActorKind, Loadout } from "../types";
 import type { RunUpgrade } from "../upgrades";
 
@@ -155,14 +156,17 @@ export function encounterRoster(run: RunState, node: MapNode): ActorKind[] {
     return node.act === 3
       ? ["boss"]
       : node.act === 2
-        ? ["warden", "sentinel", "gunner"]
-        : ["warden", "scout"];
+        ? ["gargoyle", "gargoyle"]
+        : // The first act's gatekeeper is seeded: the Warden, or a copy of the run's own chassis.
+          nodeSeed(run.seed, "act-1-boss") % 2
+          ? ["mirror"]
+          : ["warden", "scout"];
   if (node.act === 1 && node.row === 0 && node.kind === "battle")
     return [...STAGES[0]!.waves[0]!.enemies];
   const stage = STAGES[node.theme]!;
   const random = seededRandom(nodeSeed(run.seed, `encounter:${node.id}`));
   const templates = stage.waves.filter(
-    (w) => !w.enemies.some((e) => e === "boss" || e === "warden"),
+    (w) => !w.enemies.some(isBossKind),
   );
   return [...templates[Math.floor(random() * templates.length)]!.enemies];
 }

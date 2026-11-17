@@ -1,11 +1,11 @@
 import type { AreaHazard } from './types';
 
-export function createPattern(pattern: AreaHazard['pattern'], group: string, ownerId: string, min: number, max: number, target: { x: number; z: number }, variant = 0, enraged = false): AreaHazard[] {
+export function createPattern(pattern: AreaHazard['pattern'], group: string, ownerId: string, min: number, max: number, target: { x: number; z: number }, variant = 0, enraged = false, origin?: { x: number; z: number }): AreaHazard[] {
   const zones: AreaHazard[] = [];
   const windup = enraged ? 0.85 : 1.15;
   const add = (x: number, z: number, width: number, depth: number, delay = windup, height = 5) => {
     zones.push({ id: `${group}-${zones.length}`, group, ownerId, pattern, x, z, width, depth, elapsed: 0, delay, duration: 0.32, height,
-      damage: pattern === 'snipe' ? 16 : pattern === 'mine' ? 12 : enraged ? 20 : 17,
+      damage: pattern === 'snipe' ? 16 : pattern === 'mine' ? 12 : pattern === 'breath' ? (enraged ? 15 : 12) : enraged ? 20 : 17,
       force: pattern === 'mine' ? 6 : 8, hit: false });
   };
   const center = (min + max) / 2, width = max - min;
@@ -26,6 +26,11 @@ export function createPattern(pattern: AreaHazard['pattern'], group: string, own
   } else if (pattern === 'overload') {
     // Two lane pulses separated by a full dodge/reposition interval.
     for (let i = 0; i < 2; i++) for (let lane = 0; lane < 3; lane++) if (lane !== (variant + i) % 3) add(center, (lane - 1) * 3, width, 1.9, 1.2 + i * 1.15);
+  } else if (pattern === 'breath') {
+    // A gout of fire marching down the target's lane, away from whoever breathes it.
+    const from = origin?.x ?? center, direction = target.x >= from ? 1 : -1;
+    const lane = Math.max(-2.6, Math.min(2.6, target.z));
+    for (let i = 0; i < 3; i++) add(Math.max(min + 2.1, Math.min(max - 2.1, from + direction * (2.5 + i * 4.2))), lane, 4.2, 2.6, windup + i * 0.22);
   } else if (pattern === 'snipe') add(center, target.z, width, 0.9, 1.3);
   else add(target.x, target.z, 2.8, 2.8, 1.5, 1.3);
   return zones;

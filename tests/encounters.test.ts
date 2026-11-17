@@ -139,9 +139,9 @@ describe('telegraphed area attacks', () => {
 });
 
 describe('longer campaign', () => {
-  it('offers seven stages, 23 encounters, two new specialists and a dedicated horde stage', () => {
+  it('offers seven stages, 24 encounters, two new specialists and a dedicated horde stage', () => {
     expect(STAGES).toHaveLength(7);
-    expect(STAGES.flatMap(s => s.waves)).toHaveLength(23);
+    expect(STAGES.flatMap(s => s.waves)).toHaveLength(24);
     const kinds = STAGES.flatMap(s => s.waves.flatMap(w => w.enemies));
     expect(kinds).toContain('sniper'); expect(kinds).toContain('sapper');
     const horde = STAGES.find(s => s.theme === 'barracks');

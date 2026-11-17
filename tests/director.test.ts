@@ -28,7 +28,7 @@ function lab() {
       invulnerable: 0,
       armor: 0,
       attack: null,
-      bossPhase: null,
+      bossPhase: null, form: 'default',
     }),
   );
   return g;

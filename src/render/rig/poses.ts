@@ -1,4 +1,5 @@
 import type { Actor, ActorKind, WeaponId } from "../../game/types";
+import { wieldsWeapon } from "../../game/bestiary";
 import { strikePose, type Strike } from "./choreography";
 import { clamp, clamp01, mix, smooth } from "./math";
 import { restPose, type CorePose, type RigSpec } from "./skeleton";
@@ -20,8 +21,8 @@ export interface PoseContext {
 
 /** Which fighting style an actor's attack poses borrow. */
 export function poseStyle(kind: ActorKind, weapon: WeaponId): WeaponId {
-  if (kind === "player") return weapon;
-  if (kind === "bruiser" || kind === "boss" || kind === "warden") return "pile";
+  if (wieldsWeapon(kind)) return weapon;
+  if (["bruiser", "boss", "warden", "mauler", "gargoyle"].includes(kind)) return "pile";
   return kind === "scout" ? "arc" : "razor";
 }
 
@@ -108,7 +109,8 @@ export function statePose(ctx: PoseContext): CorePose {
   const pose = restPose(spec);
   pose.hipY += Math.sin(ctx.time * 2.3) * 0.012;
   pose.chestPitch += Math.sin(ctx.time * 2.3 + 0.6) * 0.012;
-  if (kind === "player") carry(pose, ctx.weapon);
+  const armed = wieldsWeapon(kind);
+  if (armed) carry(pose, ctx.weapon);
   if (kind === "gunner") setHand(pose, "R", 0, -0.32, 0.56);
 
   const state = actor.state;
@@ -116,7 +118,7 @@ export function statePose(ctx: PoseContext): CorePose {
   else if (ctx.gait.moving && (state === "run" || state === "idle")) {
     const hands = { R: [pose.handRX, pose.handRY, pose.handRZ], L: [pose.handLX, pose.handLY, pose.handLZ] };
     locomotion(pose, ctx);
-    if (kind === "player") {
+    if (armed) {
       // Two-handed and guard carries keep their grip instead of pumping the arms.
       if (ctx.weapon !== "arc") {
         setHand(pose, "R", hands.R[0]!, hands.R[1]!, hands.R[2]! + (pose.handRZ - 0.06) * 0.2);
