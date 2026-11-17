@@ -665,7 +665,7 @@ describe('RigAnimator on enemy rigs', () => {
   const KINDS: ActorKind[] = ['scout', 'bruiser', 'gunner', 'sentinel', 'charger', 'leaper', 'artillery', 'rider', 'captain', 'minion', 'sniper', 'sapper', 'warden', 'boss'];
   const SCALE: Partial<Record<ActorKind, number>> = { boss: 2.65, warden: 1.85, bruiser: 1.25, minion: 0.58 };
   const enemy = (kind: ActorKind): Actor => ({
-    bossPhase: kind === 'boss' ? 'armored' : null, phaseChanges: 0, tactic: '', id: `${kind}-1`, kind,
+    bossPhase: kind === 'boss' ? 'armored' : null, phaseChanges: 0, form: 'default', tactic: '', id: `${kind}-1`, kind,
     x: 4, y: 0, z: 0.5, vx: 0, vy: 0, vz: 0, facing: -1, damage: 0, armor: 0,
     guard: kind === 'sentinel' ? 40 : 0, mount: kind === 'rider' ? 30 : 0, leaderId: null, alive: true,
     state: 'idle', stateTime: 0, invulnerable: 0, scale: SCALE[kind] ?? 1, attack: null, telegraph: 0, aim: null,

@@ -1,6 +1,7 @@
 import { createObjective, objectiveText } from '../game/objectives';
 import { ENEMY_NAMES, SPECIAL_NAMES, TRAIT_NAMES, WEAPON_NAMES, type GameMode, type Loadout, type SupplyChoice, type WorldState } from '../game/types';
 import { STAGES } from '../game/campaign';
+import { BESTIARY, MIRROR_PHASE_ARMOR, isBossKind } from '../game/bestiary';
 import { WEAPON_GUIDES, moduleGuide } from '../game/loadouts';
 import { GRAPHICS_PRESETS, type GraphicsSettings, type GraphicsState } from '../render/graphics';
 import { getUpgradeDefinition, upgradeDescription, type UpgradeId } from '../game/upgrades';
@@ -512,9 +513,23 @@ export class GameUI {
     this.elements.announcer!.hidden = world.messageTime <= 0 || !world.message || world.phase === 'sector-clear';
     setText(this.elements.message, world.message);
     this.elements.sectorClear!.hidden = world.phase !== 'sector-clear';
-    const boss = world.enemies.find((enemy) => (enemy.kind === 'boss' || enemy.kind === 'warden') && enemy.alive);
+    const bosses = world.enemies.filter((enemy) => isBossKind(enemy.kind) && enemy.alive);
+    const boss = bosses[0];
     this.elements.boss!.hidden = !boss;
-    if (boss) {
+    if (boss?.kind === 'mirror') {
+      // Two unlaunchable modes, then the one in which it can finally be thrown off the stage.
+      const mode = Math.min(3, boss.phaseChanges + 1);
+      setText(this.elements.bossName, `MIRROR UNIT / MODE ${mode}/3 ${['DUEL', 'ASSAULT', 'OVERCLOCK'][mode - 1]}`);
+      setText(this.elements.bossDamage, `${Math.floor(boss.damage)}%`);
+      this.elements.bossArmor!.style.transform = `scaleX(${Math.max(0, Math.min(1, boss.armor / MIRROR_PHASE_ARMOR))})`;
+      setText(this.elements.bossHint, boss.bossPhase === 'transition' ? 'MODE SHIFT / 移行中' : boss.armor > 0 ? `装甲 ${Math.ceil(boss.armor)} / このモードは吹っ飛ばない` : 'OVERCLOCK / 吹き飛ばして撃墜');
+    } else if (boss?.kind === 'gargoyle') {
+      const armor = bosses.reduce((sum, twin) => sum + twin.armor, 0);
+      setText(this.elements.bossName, bosses.length > 1 ? 'TWIN GARGOYLES' : 'GARGOYLE / ENRAGED');
+      setText(this.elements.bossDamage, bosses.map((twin) => `${Math.floor(twin.damage)}%`).join(' · '));
+      this.elements.bossArmor!.style.transform = `scaleX(${Math.max(0, Math.min(1, armor / (BESTIARY.gargoyle!.armor! * 2)))})`;
+      setText(this.elements.bossHint, armor > 0 ? `装甲 ${Math.ceil(armor)} / 地上の一体を叩き、火炎の帯から離れる` : bosses.length > 1 ? '装甲破壊 / 一体ずつ吹き飛ばせ' : '残り一体 / 吹き飛ばして撃墜');
+    } else if (boss) {
       setText(this.elements.bossName, boss.kind === 'boss' ? 'THE ARCHITECT' : 'THE WARDEN');
       setText(this.elements.bossDamage, `${Math.floor(boss.damage)}%`);
       this.elements.bossArmor!.style.transform = `scaleX(${Math.max(0, Math.min(1, boss.armor / (boss.kind === 'boss' ? 135 : 70)))})`;

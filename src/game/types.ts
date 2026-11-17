@@ -3,7 +3,13 @@ import type { Coordination } from './director';
 import type { ObjectiveState } from './objectives';
 import type { MoveDefinition } from './combat/moves';
 import type { RunUpgrade, UpgradeChoice } from './upgrades';
-export type ActorKind = 'player' | 'scout' | 'bruiser' | 'gunner' | 'drone' | 'sentinel' | 'charger' | 'leaper' | 'artillery' | 'rider' | 'captain' | 'minion' | 'sniper' | 'sapper' | 'warden' | 'boss';
+export type ActorKind = 'player' | 'scout' | 'bruiser' | 'gunner' | 'drone' | 'sentinel' | 'charger' | 'leaper' | 'artillery' | 'rider' | 'captain' | 'minion' | 'sniper' | 'sapper' | 'warden' | 'boss'
+  | 'hound' | 'gunhound' | 'roller' | 'mauler' | 'jester' | 'talon' | 'mirror' | 'gargoyle';
+/**
+ * A body configuration that changes how an enemy moves, fights and is drawn:
+ * a roller is `rolling` or `deployed`, a gargoyle is `airborne` or on foot, a talon is `spent` after its flurry.
+ */
+export type ActorForm = 'default' | 'rolling' | 'deployed' | 'airborne' | 'spent';
 export type SupplyChoice = 'repair' | 'power' | 'stock';
 export type ActionState = 'idle' | 'run' | 'jump' | 'fall' | 'recover' | 'attack' | 'charge' | 'dodge' | 'airdodge' | 'hurt' | 'grab' | 'grabbed' | 'dead' | 'shield';
 export type AttackDirection = 'neutral' | 'forward' | 'back' | 'up' | 'down';
@@ -89,6 +95,7 @@ export interface AttackVisual {
 export interface Actor {
   bossPhase: 'armored' | 'transition' | 'overdrive' | null;
   phaseChanges: number;
+  form: ActorForm;
   tactic: string;
   id: string;
   kind: ActorKind;
@@ -136,7 +143,7 @@ export interface AreaHazard {
   id: string;
   group: string;
   ownerId: string;
-  pattern: 'lanes' | 'cross' | 'sweep' | 'snipe' | 'mine' | 'pincer' | 'overload';
+  pattern: 'lanes' | 'cross' | 'sweep' | 'snipe' | 'mine' | 'pincer' | 'overload' | 'breath';
   x: number;
   z: number;
   width: number;
@@ -237,7 +244,7 @@ export interface WorldState {
   events: GameEvent[];
 }
 
-export const ENEMY_NAMES: Record<ActorKind, string> = { player: 'YOU', scout: 'SCOUT', bruiser: 'BRUISER', gunner: 'GUNNER', drone: 'DRONE', sentinel: 'SENTINEL', charger: 'CHARGER', leaper: 'LEAPER', artillery: 'ARTILLERY', rider: 'STRIDER', captain: 'COMMANDER', minion: 'MINION', sniper: 'DEADEYE', sapper: 'SAPPER', warden: 'THE WARDEN', boss: 'THE ARCHITECT' };
+export const ENEMY_NAMES: Record<ActorKind, string> = { player: 'YOU', scout: 'SCOUT', bruiser: 'BRUISER', gunner: 'GUNNER', drone: 'DRONE', sentinel: 'SENTINEL', charger: 'CHARGER', leaper: 'LEAPER', artillery: 'ARTILLERY', rider: 'STRIDER', captain: 'COMMANDER', minion: 'MINION', sniper: 'DEADEYE', sapper: 'SAPPER', warden: 'THE WARDEN', boss: 'THE ARCHITECT', hound: 'HOUND', gunhound: 'GUN HOUND', roller: 'ROLLER', mauler: 'MAULER', jester: 'JESTER', talon: 'TALON', mirror: 'MIRROR UNIT', gargoyle: 'GARGOYLE' };
 export const WEAPON_NAMES: Record<WeaponId, string> = { arc: 'ARC BLADE', pile: 'PILE DRIVER', razor: 'RAZOR FISTS', lance: 'VOLT LANCE', cannon: 'SIEGE CANNON', scythe: 'ORBIT SCYTHE' };
 export const SPECIAL_NAMES: Record<SpecialId, string> = { pulse: 'ION PULSE', blink: 'PHASE SHIFT', vortex: 'GRAVITY WELL' };
 export const TRAIT_NAMES: Record<TraitId, string> = { lightweight: 'LIGHTWEIGHT', 'heavy-duty': 'HEAVY DUTY', overclocked: 'OVERCLOCKED', vampiric: 'SELF REPAIR', volatile: 'VOLATILE', stable: 'STABILIZED' };

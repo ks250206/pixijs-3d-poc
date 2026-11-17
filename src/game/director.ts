@@ -1,5 +1,6 @@
 import type { Actor, WorldState } from "./types";
 import { DEPTH_LIMIT } from "./movement";
+import { isBossKind } from "./bestiary";
 
 export type CombatRole = "ranged" | "support" | "defender" | "flanker" | "boss";
 type ThreatKind = "shot" | "melee" | "exclusive";
@@ -35,10 +36,10 @@ export const emptyCoordination = (): Coordination => ({
   escapeLane: null,
 });
 export function combatRole(a: Actor): CombatRole {
-  if (a.kind === "boss" || a.kind === "warden") return "boss";
-  if (["gunner", "sniper", "artillery"].includes(a.kind)) return "ranged";
+  if (isBossKind(a.kind)) return "boss";
+  if (["gunner", "sniper", "artillery", "gunhound", "roller"].includes(a.kind)) return "ranged";
   if (["captain", "sapper"].includes(a.kind)) return "support";
-  if (["sentinel", "bruiser"].includes(a.kind)) return "defender";
+  if (["sentinel", "bruiser", "mauler"].includes(a.kind)) return "defender";
   return "flanker";
 }
 
@@ -67,7 +68,7 @@ function shotCorridor(
 function intent(a: Actor, w: WorldState, duration: number): AttackReservation {
   let threat: ThreatKind = "exclusive",
     corridor = { min: -DEPTH_LIMIT, max: DEPTH_LIMIT };
-  if (a.kind === "gunner") {
+  if (a.kind === "gunner" || a.kind === "gunhound" || a.kind === "roller") {
     threat = "shot";
     const facing = w.player.x >= a.x ? 1 : -1;
     const x = a.x + facing * a.scale * 0.9;
@@ -75,7 +76,7 @@ function intent(a: Actor, w: WorldState, duration: number): AttackReservation {
       dz = clamp(w.player.z - a.z, -2.5, 2.5);
     const length = Math.hypot(dx, dz) || 1;
     corridor = shotCorridor(w, x, a.z, (dx / length) * 9, (dz / length) * 9, 2.4, 0.8);
-  } else if (a.kind === "scout" || a.kind === "minion") {
+  } else if (a.kind === "scout" || a.kind === "minion" || a.kind === "hound") {
     threat = "melee";
     // SERVO STRIKE's sweep, capsule radius and player body fit inside this band.
     corridor = { min: a.z - 1.55, max: a.z + 1.55 };

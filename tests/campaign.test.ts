@@ -36,7 +36,8 @@ describe('campaign structure and supplies', () => {
   it('offers seven distinct stages with introductions, combined encounters and two midbosses', () => {
     expect(STAGES).toHaveLength(7);
     expect(new Set(STAGES.map((stage) => stage.theme)).size).toBe(7);
-    expect(STAGES.filter((stage) => stage.waves.some((wave) => wave.enemies.includes('warden')))).toHaveLength(2);
+    // The Warden guards the second stage, a copy of the player's own chassis the fourth.
+    for (const midboss of ['warden', 'mirror'] as const) expect(STAGES.filter((stage) => stage.waves.some((wave) => wave.enemies.includes(midboss)))).toHaveLength(1);
     const kinds = new Set(STAGES.flatMap((s) => s.waves.flatMap((w) => w.enemies)));
     for (const kind of ['leaper', 'artillery', 'rider', 'captain', 'drone', 'boss']) expect(kinds.has(kind as ActorKind)).toBe(true);
   });

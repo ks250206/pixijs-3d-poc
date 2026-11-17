@@ -1,4 +1,4 @@
-import type { Actor } from "../types";
+import type { Actor, ActorKind } from "../types";
 import { activeEnd, type MoveDefinition } from "./moves";
 import { arcAim, weaponPose } from "./trajectory";
 export interface Vec3 {
@@ -111,17 +111,27 @@ export function sampleWeapon(
   };
 }
 
+/** Half-width, half-depth and height of a body per unit of scale; humanoids not listed use the default. */
+const BODY: Partial<Record<ActorKind, readonly [number, number, number]>> = {
+  boss: [0.72, 0.38, 2.08],
+  warden: [0.72, 0.38, 2.08],
+  gargoyle: [0.6, 0.36, 2.08],
+  bruiser: [0.48, 0.28, 2.08],
+  mauler: [0.5, 0.3, 2.08],
+  // Four legs, a wheel and wings: long and low rather than tall.
+  hound: [0.62, 0.3, 1.25],
+  gunhound: [0.62, 0.3, 1.45],
+  roller: [0.5, 0.34, 1.5],
+  talon: [0.55, 0.4, 1.4],
+};
+
 export function bodyHurtbox(actor: Pick<Actor, "x" | "y" | "z" | "scale" | "kind">): Hurtbox {
-  const width =
-    (actor.kind === "boss" || actor.kind === "warden"
-      ? 0.72
-      : actor.kind === "bruiser"
-        ? 0.48
-        : 0.34) * actor.scale;
-  const depth = (actor.kind === "boss" || actor.kind === "warden" ? 0.38 : 0.28) * actor.scale;
+  const [w, d, h] = BODY[actor.kind] ?? [0.34, 0.28, 2.08];
+  const width = w * actor.scale,
+    depth = d * actor.scale;
   return {
     min: { x: actor.x - width, y: actor.y + 0.03, z: actor.z - depth },
-    max: { x: actor.x + width, y: actor.y + 2.08 * actor.scale, z: actor.z + depth },
+    max: { x: actor.x + width, y: actor.y + h * actor.scale, z: actor.z + depth },
   };
 }
 
