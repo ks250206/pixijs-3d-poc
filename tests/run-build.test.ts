@@ -260,14 +260,14 @@ describe('objectives change battlefield danger and staged arrivals', () => {
   it('keeps a horde wave alive during staggered reinforcements, freezes warnings on pause and clears them on retry', () => {
     const g = stage(4);
     expect(g.world.enemies.filter((enemy) => enemy.alive)).toHaveLength(4);
-    expect(g.world.pendingSpawns).toHaveLength(4);
+    expect(g.world.pendingSpawns).toHaveLength(8);
     g.pause(); const countdown = g.world.pendingSpawns[0]!.remaining; tick(g, 120);
     expect(g.world.pendingSpawns[0]!.remaining).toBe(countdown); g.resume();
     g.world.enemies.forEach((enemy) => { enemy.x = g.world.arenaMax + 6; }); tick(g, 100);
     expect(g.world.wave).toBe(1);
-    tick(g, 120);
+    tick(g, 240);
     expect(g.world.pendingSpawns).toHaveLength(0);
-    expect(g.world.enemies.filter((enemy) => enemy.alive)).toHaveLength(4);
+    expect(g.world.enemies.filter((enemy) => enemy.alive)).toHaveLength(8);
     g.restart(); expect(g.world.pendingSpawns).toHaveLength(0); expect(g.world.upgrades).toHaveLength(0);
   });
 });

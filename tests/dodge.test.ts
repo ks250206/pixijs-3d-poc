@@ -219,6 +219,8 @@ function telegraphed(kind: ActorKind, dx: number) {
 /** Dodge `before` frames ahead of the first hit frame; true if the player got away untouched. */
 function escapes(kind: ActorKind, dx: number, before: number, input: Partial<InputFrame>, hold = false) {
   const { g, p, startup } = telegraphed(kind, dx);
+  // Measure this telegraph only; faster AI can start a second attack after the dodge.
+  g.world.mode = 'training';
   tick(g, startup - before);
   tick(g, 1, { dodge: true, ...input });
   tick(g, 100, hold ? input : {});

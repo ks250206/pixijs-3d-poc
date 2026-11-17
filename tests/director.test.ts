@@ -281,7 +281,7 @@ describe("bounded complementary pressure", () => {
     expect(d.reserve(spare, w, 1.05)).toBe(false);
     scout.state = "idle";
     advance(d, w, 1 / 60, [spare]);
-    expect(w.coordination.recoveryRemaining).toBe(0.95);
+    expect(w.coordination.recoveryRemaining).toBe(0.6);
     expect(d.reserve(spare, w, 1.05)).toBe(false);
   });
 });
@@ -300,9 +300,9 @@ describe("reservation lifetime", () => {
     actor.state = "idle";
     advance(d, w, 1 / 60, [actor]);
     expect(w.coordination.reservations).toHaveLength(0);
-    expect(w.coordination.recoveryRemaining).toBeGreaterThanOrEqual(0.65);
+    expect(w.coordination.recoveryRemaining).toBeGreaterThanOrEqual(0.4);
     expect(d.reserve(actor, w, 0.8)).toBe(false);
-    advance(d, w, 0.66, [actor]);
+    advance(d, w, 0.41, [actor]);
     expect(d.reserve(actor, w, 0.8)).toBe(true);
   });
 

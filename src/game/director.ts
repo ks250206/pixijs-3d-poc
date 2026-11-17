@@ -152,13 +152,13 @@ export class EncounterDirector {
     }
     if (old && !this.state.reservations.length) {
       // Ready-only selection removes accidental idle stalls; keep an explicit counterattack window.
-      this.gap = this.groupStarts > 1 ? 0.95 : 0.65;
+      this.gap = this.groupStarts > 1 ? 0.6 : 0.4;
       this.groupStarts = 0;
       this.advanceBeat();
     }
     if (
       !this.state.reservations.length &&
-      this.elapsed > (this.state.beat === "recover" ? 0.8 : 1.6)
+      this.elapsed > (this.state.beat === "recover" ? 0.5 : 1.6)
     )
       this.advanceBeat();
     this.ready = ready.filter(
@@ -169,7 +169,7 @@ export class EncounterDirector {
     this.state.readyCount = this.ready.length;
     this.state.recoveryRemaining = Math.max(
       this.gap,
-      this.state.beat === "recover" ? 0.8 - this.elapsed : 0,
+      this.state.beat === "recover" ? 0.5 - this.elapsed : 0,
     );
     if (this.state.reservations.length < 2) this.state.escapeLane = null;
     w.coordination = this.state;

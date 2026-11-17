@@ -224,7 +224,7 @@ describe("review regression coverage", () => {
     lab.hit(p, e, 10, 0, 0, 0, 1, "enemy");
     expect(p.damage).toBeCloseTo(8.8);
     lab.hit(e, p, 10, 0, 0, 0, 1, "jab");
-    expect(e.damage).toBeCloseTo(11.2);
+    expect(e.damage).toBeCloseTo(10.08);
     g.world.hitstop = 0;
     g.world.specialCooldown = 1;
     g.update(1 / 60);

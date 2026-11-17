@@ -210,6 +210,8 @@ export function playerMove(
     duration += 3;
   }
   const active = Math.min(kind === "smash" ? 10 : 8, duration - startup - 2);
+  // Keep the strike itself responsive, but commit normals to a longer follow-through.
+  if (kind !== "smash") duration += 6;
   const recovery = duration - startup - active;
   const label =
     kind === "jab"
@@ -223,7 +225,13 @@ export function playerMove(
             on: "hit",
             from: startup + Math.min(active, 3),
             to: duration - 1,
-            actions: ["attack", "special", "jump", "dodge"],
+            actions: ["jump", "dodge"],
+          },
+          {
+            on: "hit",
+            from: startup + Math.min(active, 3) + 6,
+            to: duration - 1,
+            actions: ["attack", "special"],
           },
           { on: "whiff", from: startup + active + 2, to: duration - 1, actions: ["dodge"] },
         ];

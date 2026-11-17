@@ -62,7 +62,8 @@ export function runCampaignInputs(
             !w.hazards.some((h) => !h.hit && insideHazard(h, p.x, p.z));
         else if (p.state === "hurt") input.moveX = Math.sign((w.arenaMin + w.arenaMax) / 2 - p.x);
         else {
-          const approachX = Math.max(w.arenaMin + 2.5, Math.min(w.arenaMax - 2.5, target.x)) - p.x;
+          // Approach edge-camping ranged enemies within melee reach while staying onstage.
+          const approachX = Math.max(w.arenaMin + 0.75, Math.min(w.arenaMax - 0.75, target.x)) - p.x;
           input.moveX = Math.abs(approachX) > 2.1 ? Math.sign(approachX) : 0;
           input.moveZ = Math.abs(dz) > 0.6 ? Math.sign(dz) : 0;
           const canAct = ["idle", "run", "jump", "fall"].includes(p.state);
